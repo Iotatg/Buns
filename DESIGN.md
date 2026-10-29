@@ -11,6 +11,20 @@ Buns treats an AI coworker as a **durable working relationship**, not a disposab
 
 The core loop is **ask → inspect the run → approve or refuse → keep the artifact**. Today is an operational summary, while each coworker owns the full thread and audit trail.
 
+## What the second research pass changed
+
+Two more repositories were read at source level before this pass, and each one earned a specific slice of the product.
+
+**Rakazo** (`packages/ui-tokens/src/tokens.css`, `apps/web/src/pages/Shell.tsx`, `packages/db/prisma/schema.prisma`) contributed two things. First, the interface language: near-black surfaces (#0e0e0e sidebar, #161616 main, #1f1f1f cards), one blue reserved for status and links, a 12px radius, and system-font chrome. Buns adopts those tokens with the same variable names it already had, so the swap was a token replacement rather than a rewrite — and keeps its serif narrative voice, which Rakazo does not have. Second, two surfaces: the **board** (tickets a human opens, a bun claims, the engine settles) and **artifacts** (the readable copy of every approved effect). Rakazo's sandbox fleet, oRPC layer, billing, and VNC computer were studied and deliberately cut: Buns has no shell to give a real computer to.
+
+**Octop** (`src/octop/infra/agents/experts/`, `persona/mbti_profiles.py`, `agents/plugins/manager.py`, `plugins/demo-*`) contributed the **expert library** — eight experts, each with an MBTI-style persona reduced to two honest lines (how it reads a request, what it overdoes) — and the **plugin contract**: manifest, match rule, handler, screen. Hatching an expert makes a real dot; the bundled tools (weather, unit convert, trending) run as visible steps with sample data labelled as sample. Octop's HITL coordinator informed the approval rules: a rule may pre-approve non-mail gates, mail always asks, and every auto-approval is logged like a human decision. Octop's real terminal, browser, and remote desktop were cut for the same reason Rakazo's computer was.
+
+| Source | Took | Left |
+| --- | --- | --- |
+| OpenDots | chat/tasks/memories/space views, task+actions+schedule API, approvals | voice, MCP, real integrations |
+| Rakazo | dark tokens, board, artifacts, tool-activity disclosure | sandboxes, oRPC, billing, VNC |
+| Octop | experts, personas, plugin kinds, HITL rules, usage | terminal, browser, desktop control |
+
 ## What the source research changed
 
 The second pass through the OpenDots source turned a study into an alignment. Three facts from the code drove the work: the client recognises exactly four views (`chat`, `tasks`, `memories`, `space`) plus `settings` and `schedule` dialogs; the server exposes `/api/state`, `/api/tasks` with `:id/actions` and `:id/schedule`, `/api/settings`, and `/api/memories`; and a task carries its schedule, its actions, and its computer steps in one object.
@@ -41,26 +55,25 @@ OpenDots features not modelled here—voice, real browser control and takeover, 
 
 rea was cloned at `1ef5918`. It is a reverse-engineering MCP/CLI, not an OpenDots dependency. Its useful discipline is evidence: connect UI claims to routes and implementation, record limitations, and never confuse a visible element with a working integration.
 
-## Visual direction: the working sheet
+## Visual direction: the working sheet, dark
 
-The visual metaphor is an editorial working sheet beside a dark instrument panel.
+The first build set an editorial working sheet on bone paper. The second pass adopted Rakazo's interface language: the same working sheet, printed on near-black stock.
 
-- **Bone ground** (`#f5f4f0`) and warm paper cards keep the workspace quiet.
-- **Espresso rail** (`#16140f`) provides a stable navigation landmark.
-- **Persimmon** (`#c2410c`) is reserved for action and the current decision.
-- **Newsreader** carries headlines, document prose, and run language because reading is the primary activity.
-- **Instrument Sans** handles controls and navigation.
-- **JetBrains Mono** identifies tools, revisions, timestamps, and other machine facts.
+- **Near-black surfaces** — sidebar `#0e0e0e`, main ground `#161616`, cards `#1f1f1f`, screens `#232323` — keep the workspace quiet and let content carry the light.
+- **One blue** (`#4d9bff`, Rakazo's status blue) is reserved for links, unread, and working states. The primary button is Rakazo's white-on-dark.
+- **Semantic colors** come from the same tokens: `#00ba69` for done and working, `#d29922` for waiting, `#ff6463` for destructive.
+- **Newsreader** still carries headlines, document prose, and run language because reading is the primary activity; the chrome moved to the system stack, as Rakazo's does.
+- **12px radius** and thin 10%-white borders replace the old 4px paper edges.
 
-The Computer is the only large dark object in the content area. Its screens use their own light document surface, so mail and pages remain readable rather than becoming decorative terminal graphics.
+The Computer screens sit on their own slightly lighter surface (`#232323`), so documents and mail remain readable rather than becoming decorative terminal graphics.
 
-Spacing follows a 4px base rhythm. Borders are thin and low-contrast; elevation is rare. Cards appear only for decisions, spaces, messages, and the composer—not around every section.
+Spacing follows a 4px base rhythm. Borders are thin and low-contrast; elevation is rare. Cards appear only for decisions, tickets, experts, messages, and the composer—not around every section.
 
 ## Typography and accessibility
 
 Body text starts at 15px with 1.6 line height. Document prose is 17px with a 66-character measure. Heading levels remain sequential. Generated Computer documents use styled paragraphs instead of skipping from the page heading to an `<h4>`.
 
-Text and controls were checked in rendered pages. Muted colors on the dark rail and Computer were raised to readable contrast. Search placeholders use full-opacity muted ink. Focus receives a visible persimmon outline. Reduced-motion preferences disable playback animation.
+Text and controls were checked in rendered pages with the anti-pattern detector: all fourteen pages report zero findings, including placeholder contrast on dark and the board's card-in-card nesting, which was flattened to columns divided by hairlines. Focus receives a visible blue outline. Reduced-motion preferences disable playback animation.
 
 Long prose uses `text-wrap: pretty` to reduce orphan words. Tables scroll inside their own container rather than widening the application.
 

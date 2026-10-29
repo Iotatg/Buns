@@ -307,7 +307,8 @@ export fn view_dot(st, dot, thread, focus, start_at) {
         let msg = thread["messages"][i]
         if msg["role"] == "user" {
             h += "<div class=\"msg msg-user\"><div class=\"bubble\">" + esc(msg["text"]) + "</div>"
-            h += "<span class=\"msg-time\">" + clock(msg["at"]) + "</span></div>"
+            h += "<span class=\"msg-foot\"><span class=\"msg-time\">" + clock(msg["at"]) + "</span>"
+            h += "<button class=\"msg-fork\" type=\"button\" data-fork=\"" + msg["id"] + "\">Fork from here</button></span></div>"
         } else {
             h += "<div class=\"msg msg-dot\">" + glyph(dot, 24)
             h += "<div class=\"msg-body\"><p class=\"msg-text\">" + esc(msg["text"]) + "</p>"

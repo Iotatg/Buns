@@ -9,6 +9,8 @@
 
 import { state, commit, new_id, clip, slug } from "./store.bun"
 import { recall, add_memory } from "./memory.bun"
+import { artifact_from_step, ticket_settle } from "./work.bun"
+import { plugin_for } from "./plugins.bun"
 
 // ------------------------------------------------------------------ lookup
 
@@ -111,6 +113,12 @@ fn has(text, word) {
 // The plan is chosen from the words in the goal, then filled from the store so
 // that the screens show this workspace and not a recording of another one.
 export fn plan(st, dot, goal) {
+    // A bundled plugin answers before the playbooks: weather, conversions,
+    // and similar small tools have their own contract and no risk.
+    let plug = plugin_for(goal)
+    if plug != null {
+        return plugin_plan(plug, goal)
+    }
     let g = str(goal)
     var kind = "research"
     if has(g, "invoice") or has(g, "spend") or has(g, "budget") or has(g, "close") or has(g, "pipeline") or has(g, "revenue") {
@@ -133,6 +141,14 @@ export fn plan(st, dot, goal) {
         kind = "ops"
     }
     return plan_of(st, kind, dot, g)
+}
+
+// A plugin task is one honest step: the tool runs, the screen shows what it
+// produced, and the label says where the data came from.
+fn plugin_plan(plug, goal) {
+    var a = step("plugin." + plug["id"], plug["name"] + " ran on this request", 0, 600, "sample data, clearly labelled")
+    a["screen"] = plug["run"](goal)
+    return [a]
 }
 
 export fn plan_of(st, kind, dot, goal) {
@@ -472,6 +488,11 @@ fn apply(st, dot, run, s) {
     } else if s["tool"] == "pr.open" {
         effect_pr(st, dot, run, s)
     }
+    // Whatever left the workspace leaves a readable copy behind: the artifact
+    // is the audit evidence, not a second effect.
+    if s["tool"] == "mail.send" or s["tool"] == "pr.open" or s["tool"] == "sheet.write" or s["tool"] == "calendar.invite" {
+        artifact_from_step(st, dot, run, s)
+    }
     s["state"] = "applied"
 }
 
@@ -482,13 +503,28 @@ export fn advance(st, run) {
     while run["cursor"] < len(run["steps"]) {
         let s = run["steps"][run["cursor"]]
         if s["risk"] == 1 and s["state"] != "approved" {
-            s["state"] = "waiting"
-            run["status"] = "waiting"
-            if dot != null {
-                dot["status"] = "waiting"
-                dot["now"] = s["label"]
+            // Approval rules, learned from Octop's HITL coordinator: a rule
+            // can pre-approve everything except the tools that speak to the
+            // outside world, which always ask. The rule decision is logged
+            // like a human one, so the audit trail stays complete.
+            var auto = false
+            let rules = st["settings"]["rules"]
+            if rules != null and rules["auto_low"] == true and s["tool"] != "mail.send" {
+                auto = true
             }
-            return run
+            if auto {
+                s["state"] = "approved"
+                s["decided_at"] = now()
+                st["events"].push({ "at": now(), "dot": run["dot"], "text": "Auto-approved by rule · " + clip(s["label"], 50) })
+            } else {
+                s["state"] = "waiting"
+                run["status"] = "waiting"
+                if dot != null {
+                    dot["status"] = "waiting"
+                    dot["now"] = s["label"]
+                }
+                return run
+            }
         }
         if s["state"] == "waiting" or s["state"] == "approved" {
             s["state"] = "done"
@@ -503,6 +539,9 @@ export fn advance(st, run) {
     run["status"] = "done"
     run["at_done"] = now()
     st["events"].push({ "at": now(), "dot": run["dot"], "text": "Finished · " + clip(run["goal"], 56) })
+    if run["ticket"] != null {
+        ticket_settle(st, run["id"], true)
+    }
     if dot != null {
         dot["status"] = "idle"
         dot["now"] = "Last: " + clip(run["goal"], 34)
@@ -571,6 +610,9 @@ export fn decide(st, run_id, approve) {
         s["decided_at"] = now()
         run["cursor"] += 1
         run["refused"] = true
+        if run["ticket"] != null {
+            ticket_settle(st, run["id"], false)
+        }
         st["events"].push({ "at": now(), "dot": run["dot"], "text": "Refused · " + clip(s["label"], 56) })
         commit()
         return advance(st, run)

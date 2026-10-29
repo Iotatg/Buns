@@ -45,6 +45,7 @@ has() {
 code() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
 body() { curl -s "$1"; }
 json() { curl -s -X "$1" -H 'content-type: application/json' -d "$3" "$2"; }
+codep() { curl -s -o /dev/null -w '%{http_code}' -X "$1" -H 'content-type: application/json' -d "$3" "$2"; }
 
 printf 'buns — smoke test against %s\n' "$BASE"
 
@@ -141,6 +142,68 @@ check 'an empty memory is a 400' "$(curl -s -o /dev/null -w '%{http_code}' -X PO
 SET=$(curl -s -X PATCH -H 'content-type: application/json' -d '{"notify_gates":false,"tz_label":"IST"}' $BASE/api/settings)
 has   'settings can be patched' "$SET" '"notify_gates": false'
 check 'GET on settings is a 405' "$(code $BASE/api/settings)" "405"
+
+# --- board ----------------------------------------------------------------
+
+check 'board answers' "$(code $BASE/board)" "200"
+has   'board shows the three columns' "$(body $BASE/board)" 'To do'
+has   'board has a seeded ticket' "$(body $BASE/board)" 'September close'
+has   'a ticket can be opened' "$(curl -s -X POST -H 'content-type: application/json' -d '{"title":"Smoke the ticket flow","detail":"from the suite"}' $BASE/api/tickets)" '"status": "todo"'
+check 'a ticket without a title is a 400' "$(codep POST $BASE/api/tickets '{}')" "400"
+TCL=$(curl -s -X POST -H 'content-type: application/json' -d '{"dot":"scout"}' $BASE/api/tickets/k_seed_1/claim)
+has   'claiming starts a real task' "$TCL" '"task": "r_'
+TID=$(printf '%s' "$TCL" | sed -e 's/.*"task": "r_//' -e 's/".*//')
+check 'the claimed task waits at its gate' "$(curl -s $BASE/api/tasks/r_$TID | sed -e 's/.*"status": "//' -e 's/".*//')" "waiting"
+has   'approving the claimed task finishes it' "$(curl -s -X POST -H 'content-type: application/json' -d '{"action":"approve"}' $BASE/api/tasks/r_$TID/actions)" '"status": "done"'
+has   'the settled ticket is done' "$(body $BASE/api/state)" '"status": "done"'
+check 'a nonsense move is a 400' "$(codep POST $BASE/api/tickets/k_seed_2/move '{"status":"sideways"}')" "400"
+
+# --- artifacts ------------------------------------------------------------
+
+check 'artifacts answers' "$(code $BASE/artifacts)" "200"
+has   'artifacts has the seeded PR copy' "$(body $BASE/artifacts)" 'fail closed'
+check 'the artifact page answers' "$(code $BASE/artifacts/a_seed_pr)" "200"
+check 'an unknown artifact is a 404' "$(code $BASE/artifacts/a_none)" "404"
+has   'approving a gate left a mail artifact' "$(body $BASE/api/state)" '"kind": "mail"'
+
+# --- experts --------------------------------------------------------------
+
+check 'experts answers' "$(code $BASE/experts)" "200"
+has   'experts lists the MBTI codes' "$(body $BASE/experts)" 'INTJ'
+HEX=$(curl -s -X POST $BASE/api/experts/market-watcher/hatch)
+has   'hatching makes a dot' "$HEX" '"dot": "sirius"'
+check 'an unknown expert is a 404' "$(codep POST $BASE/api/experts/nobody/hatch '{}')" "404"
+check 'the hatched bun has a thread' "$(code $BASE/buns/sirius)" "200"
+
+# --- plugins --------------------------------------------------------------
+
+check 'plugins answers' "$(code $BASE/plugins)" "200"
+has   'plugins lists the contract' "$(body $BASE/plugins)" 'Unit convert'
+PW=$(curl -s -X POST -H 'content-type: application/json' -d '{"dot":"relay","goal":"Check the weather in Pisces"}' $BASE/api/tasks)
+has   'the weather plugin ran' "$PW" '"task": "r_'
+PT=$(printf '%s' "$PW" | sed -e 's/.*"task": "r_//' -e 's/".*//')
+has   'the plugin step is visible' "$(body $BASE/api/tasks/r_$PT)" 'plugin.weather'
+PC=$(curl -s -X POST -H 'content-type: application/json' -d '{"dot":"scout","goal":"Convert 10 km to miles"}' $BASE/api/tasks)
+PT2=$(printf '%s' "$PC" | sed -e 's/.*"task": "r_//' -e 's/".*//')
+has   'the conversion is right' "$(body $BASE/api/tasks/r_$PT2)" '6.21 miles'
+
+# --- usage and rules ------------------------------------------------------
+
+check 'usage answers' "$(code $BASE/usage)" "200"
+has   'usage counts tasks' "$(body $BASE/usage)" 'Tasks'
+has   'rules can be patched' "$(curl -s -X PATCH -H 'content-type: application/json' -d '{"rules":{"auto_low":true}}' $BASE/api/settings)" '"auto_low": true'
+PR=$(curl -s -X POST -H 'content-type: application/json' -d '{"dot":"forge","goal":"Fix the export bug"}' $BASE/api/tasks)
+PT3=$(printf '%s' "$PR" | sed -e 's/.*"task": "r_//' -e 's/".*//')
+has   'the rule auto-approved the non-mail gate' "$(body $BASE/api/tasks/r_$PT3)" '"status": "done"'
+
+# --- fork and unread ------------------------------------------------------
+
+FT=$(printf '%s' "$(curl -s $BASE/api/state)" | python3 -c "import json,sys; st=json.load(sys.stdin); t=st['threads'][0]; print(t['id'], [m['id'] for m in t['messages'] if m['role']=='user'][0])")
+TFID=$(printf '%s' "$FT" | cut -d' ' -f1); TMID=$(printf '%s' "$FT" | cut -d' ' -f2)
+has   'a thread forks at a message' "$(curl -s -X POST -H 'content-type: application/json' -d "{\"message\":\"$TMID\"}" $BASE/api/threads/$TFID/fork)" '"ok": true'
+has   'the fork names its source' "$(body $BASE/api/state)" 'Fork · '
+check 'a thread with a query opens' "$(code "$BASE/buns/post?thread=$TFID")" "200"
+check 'a fork of a missing thread is a 404' "$(codep POST $BASE/api/threads/t_none/fork '{}')" "404"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

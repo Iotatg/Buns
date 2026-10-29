@@ -7,8 +7,11 @@
 
 import { esc, clip, ago, until } from "./store.bun"
 import { icon, glyph, pill, shell, bar, status_dot } from "./ui.bun"
-import { dot_by_id, open_gates } from "./agent.bun"
+import { dot_by_id, open_gates, dot_runs } from "./agent.bun"
 import { dot_memories } from "./memory.bun"
+import { artifact_by_id } from "./work.bun"
+import { experts, persona } from "./experts.bun"
+import { plugins } from "./plugins.bun"
 
 // ---------------------------------------------------------------- helpers
 
@@ -297,6 +300,13 @@ export fn view_settings(st) {
     h += "<label class=\"set-check\"><input type=\"checkbox\" name=\"notify_digest\"" + checked(s["notify_digest"]) + "><span>Send a morning digest of what happened</span></label>"
     h += "</section>"
 
+    h += "<section class=\"block\"><div class=\"sec-head\"><h2 class=\"sec-title\">Approval rules</h2></div>"
+    h += "<p class=\"set-desc\">A rule can pre-approve the risky steps that stay inside the building. Mail is exempt on purpose: sending is the one action no rule should take for you. Every auto-approval is logged like a human decision.</p>"
+    let rules = s["rules"]
+    h += "<label class=\"set-check\"><input type=\"checkbox\" name=\"rules_auto_low\"" + checked(rules != null and rules["auto_low"] == true) + "><span>Auto-approve non-mail steps that need a gate</span></label>"
+    h += "<label class=\"set-check\"><input type=\"checkbox\" name=\"rules_always_ask_mail\"" + checked(rules == null or rules["always_ask_mail"] != false) + "><span>Always ask before sending mail</span></label>"
+    h += "</section>"
+
     h += "<section class=\"block\"><div class=\"sec-head\"><h2 class=\"sec-title\">Integrations</h2><span class=\"sec-note\">not connected</span></div>"
     h += "<p class=\"set-desc\">Each row is a service this build could hold a gate in front of. None of them is connected, and the page says so rather than implying otherwise.</p>"
     h += "<ul class=\"int-list\">"
@@ -325,4 +335,318 @@ fn checked(v) {
         return " checked"
     }
     return ""
+}
+
+// ------------------------------------------------------------------ board
+
+// The board is Rakazo's second surface: tickets anyone can open, a bun can
+// claim, and the engine settles when the task ends.
+export fn view_board(st) {
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Board</span>"],
+        "<span class=\"bar-date\">" + str(len(st["tickets"])) + " tickets</span>")
+
+    var h = "<div class=\"view view-board\">"
+    h += "<h1 class=\"page-h\">Board</h1>"
+    h += "<p class=\"page-lede\">Tickets are promises in the open. You open one, a bun claims it, and the task it starts is a real task — same plan, same gates, same record. When the task finishes, the card moves itself.</p>"
+
+    h += "<form class=\"ticket-add\" data-ticket-form>"
+    h += "<label class=\"sr\" for=\"tk-title\">Title</label>"
+    h += "<input type=\"text\" id=\"tk-title\" name=\"title\" placeholder=\"What needs doing?\" required>"
+    h += "<label class=\"sr\" for=\"tk-detail\">Detail</label>"
+    h += "<input type=\"text\" id=\"tk-detail\" name=\"detail\" placeholder=\"Any context worth carrying (optional)\">"
+    h += "<button class=\"btn btn-fill\" type=\"submit\">Open ticket</button>"
+    h += "</form>"
+
+    h += "<div class=\"board-cols\">"
+    var cols = [["todo", "To do"], ["doing", "In progress"], ["done", "Done"]]
+    var c = 0
+    while c < len(cols) {
+        let key = cols[c][0]
+        let label = cols[c][1]
+        var cards = []
+        var i = 0
+        while i < len(st["tickets"]) {
+            if st["tickets"][i]["status"] == key {
+                cards.push(st["tickets"][i])
+            }
+            i += 1
+        }
+        h += "<section class=\"board-col\"><div class=\"bc-head\"><span>" + label + "</span><span class=\"bc-count\">" + str(len(cards)) + "</span></div>"
+        if len(cards) == 0 {
+            h += "<p class=\"bc-empty\">Nothing here.</p>"
+        }
+        var j = 0
+        while j < len(cards) {
+            h += ticket_card(st, cards[j], key)
+            j += 1
+        }
+        h += "</section>"
+        c += 1
+    }
+    h += "</div>"
+    h += "</div>"
+    return shell("board", "Board", body + h)
+}
+
+fn ticket_card(st, t, col) {
+    var h = "<article class=\"tk\" data-ticket=\"" + t["id"] + "\">"
+    h += "<p class=\"tk-title\">" + esc(t["title"]) + "</p>"
+    if len(str(t["detail"]).trim()) > 0 {
+        h += "<p class=\"tk-detail\">" + esc(clip(t["detail"], 90)) + "</p>"
+    }
+    h += "<div class=\"tk-meta\">" + ago(t["updated"]) + " · opened by " + opened_by(t["by"])
+    if t["run"] != null and t["run"] != "" and t["thread"] != null {
+        h += " · <a href=\"/buns/" + esc(t["by"]) + "?thread=" + esc(t["thread"]) + "\">thread</a>"
+    }
+    h += "</div>"
+    h += "<div class=\"tk-acts\">"
+    if col == "todo" {
+        h += claim_menu(st, t)
+        h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-ticket-move=\"done\" data-id=\"" + t["id"] + "\">Done</button>"
+    } else if col == "doing" {
+        h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-ticket-move=\"todo\" data-id=\"" + t["id"] + "\">Back</button>"
+    } else {
+        h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-ticket-move=\"todo\" data-id=\"" + t["id"] + "\">Reopen</button>"
+    }
+    h += "</div></article>"
+    return h
+}
+
+fn claim_menu(st, t) {
+    var h = "<span class=\"claim-menu\" data-claim=\"" + t["id"] + "\">"
+    var i = 0
+    while i < len(st["dots"]) {
+        let d = st["dots"][i]
+        h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-claim-dot=\"" + d["id"] + "\">" + esc(d["name"]) + "</button>"
+        i += 1
+    }
+    h += "</span>"
+    return h
+}
+
+// --------------------------------------------------------------- artifacts
+
+export fn view_artifacts(st) {
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Artifacts</span>"],
+        "<span class=\"bar-date\">" + str(len(st["artifacts"])) + " kept</span>")
+
+    var h = "<div class=\"view view-artifacts\">"
+    h += "<h1 class=\"page-h\">Artifacts</h1>"
+    h += "<p class=\"page-lede\">Everything a task produced that is not a page: the mail copy it sent, the pull request it opened, the sheet change it made. Each one is the audit copy of an approved step.</p>"
+
+    if len(st["artifacts"]) == 0 {
+        h += "<p class=\"quiet\">No artifacts yet. Approve a mail, a pull request, or a sheet change and its copy lands here.</p>"
+    } else {
+        h += "<div class=\"artifact-grid\">"
+        var i = len(st["artifacts"]) - 1
+        while i >= 0 {
+            let a = st["artifacts"][i]
+            let d = dot_by_id(st, a["by"])
+            h += "<a class=\"artifact-card\" href=\"/artifacts/" + a["id"] + "\">"
+            h += "<div class=\"ac-top\"><span class=\"pill\">" + esc(a["kind"]) + "</span><span class=\"ac-when\">" + ago(a["at"]) + "</span></div>"
+            h += "<p class=\"ac-title\">" + esc(a["title"]) + "</p>"
+            h += "<p class=\"ac-meta\">" + who_name(st, a["by"]) + " · from task " + esc(a["run"]) + "</p>"
+            h += "</a>"
+            i -= 1
+        }
+        h += "</div>"
+    }
+    h += "</div>"
+    return shell("artifacts", "Artifacts", body + h)
+}
+
+export fn view_artifact(st, id) {
+    let a = artifact_by_id(st, id)
+    if a == null {
+        return null
+    }
+    let d = dot_by_id(st, a["by"])
+    var body = bar(["<a href=\"/\">Today</a>", "<a href=\"/artifacts\">Artifacts</a>", "<span class=\"crumb-now\">" + esc(a["kind"]) + "</span>"], "")
+    var h = "<div class=\"view view-artifact\">"
+    h += "<p class=\"pill\">" + esc(a["kind"]) + "</p>"
+    h += "<h1 class=\"page-h\">" + esc(a["title"]) + "</h1>"
+    h += "<p class=\"meta-line\">" + who_name(st, a["by"]) + " · " + ago(a["at"]) + " · produced by task " + esc(a["run"]) + "</p>"
+    h += "<pre class=\"artifact-body\">" + esc(a["body"]) + "</pre>"
+    h += "<p class=\"quiet\">This is the workspace copy. Whatever the step did outside stopped at the same gate this record came from.</p>"
+    h += "</div>"
+    return shell("artifacts", "Artifacts", body + h)
+}
+
+// ----------------------------------------------------------------- experts
+
+export fn view_experts(st) {
+    let cat = experts()
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Experts</span>"],
+        "<span class=\"bar-date\">" + str(len(cat)) + " in the library</span>")
+
+    var h = "<div class=\"view view-experts\">"
+    h += "<h1 class=\"page-h\">Experts</h1>"
+    h += "<p class=\"page-lede\">Each expert is a persona with a job description and a planning default. Hatching one adds a real bun to the rail — its own thread, its own memory, its own gates. The MBTI letters describe a habit, not a promise.</p>"
+
+    h += "<div class=\"expert-grid\">"
+    var i = 0
+    while i < len(cat) {
+        let ex = cat[i]
+        let per = persona(ex["code"])
+        let used = dot_by_name(st, ex["name"])
+        h += "<article class=\"expert-card\">"
+        h += "<div class=\"ex-top\"><span class=\"ex-code\">" + esc(ex["code"]) + "</span>"
+        if used {
+            h += "<span class=\"pill pill-auto\">on the rail</span>"
+        }
+        h += "</div>"
+        h += "<p class=\"ex-name\">" + esc(ex["name"]) + "</p>"
+        h += "<p class=\"ex-role\">" + esc(ex["role"]) + "</p>"
+        h += "<p class=\"ex-blurb\">" + esc(ex["blurb"]) + "</p>"
+        h += "<p class=\"ex-persona\"><strong>Reads requests:</strong> " + esc(per["reads"]) + "</p>"
+        h += "<p class=\"ex-persona\"><strong>Habit:</strong> " + esc(per["overdoes"]) + "</p>"
+        if not used {
+            h += "<button class=\"btn btn-fill btn-sm\" type=\"button\" data-hatch=\"" + ex["id"] + "\">Hatch " + esc(ex["name"]) + "</button>"
+        } else {
+            h += "<a class=\"btn btn-ghost btn-sm\" href=\"/buns/" + esc(used["id"]) + "\">Open thread</a>"
+        }
+        h += "</article>"
+        i += 1
+    }
+    h += "</div>"
+    h += "</div>"
+    return shell("experts", "Experts", body + h)
+}
+
+fn dot_by_name(st, name) {
+    var i = 0
+    while i < len(st["dots"]) {
+        if st["dots"][i]["name"] == name {
+            return st["dots"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+// ----------------------------------------------------------------- plugins
+
+export fn view_plugins(st) {
+    let list = plugins()
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Plugins</span>"],
+        "<span class=\"bar-date\">" + str(len(list)) + " bundled</span>")
+
+    var h = "<div class=\"view view-plugins\">"
+    h += "<h1 class=\"page-h\">Plugins</h1>"
+    h += "<p class=\"page-lede\">A plugin is a manifest, a match rule, and a handler — the tool contract, kept small. These are bundled, so there is nothing to install; asking a bun about weather, a conversion, or trending in a message runs the tool as a visible step.</p>"
+
+    h += "<ul class=\"plugin-list\">"
+    var i = 0
+    while i < len(list) {
+        let p = list[i]
+        h += "<li class=\"plugin\">"
+        h += "<div class=\"plg-main\"><p class=\"plg-name\">" + esc(p["name"]) + "</p>"
+        h += "<p class=\"plg-desc\">" + esc(p["desc"]) + "</p>"
+        h += "<p class=\"plg-tool\">answers to: <code>" + esc(triggers(p["match"])) + "</code></p></div>"
+        h += "<span class=\"pill\">" + esc(p["kind"]) + "</span>"
+        h += "</li>"
+        i += 1
+    }
+    h += "</ul>"
+    h += "<p class=\"quiet\">Skill and hook kinds from the source design are documented here but not installed: a skill would inject a page into every plan, and a hook would wrap the engine. Both are one honest step away, not hidden behind a toggle.</p>"
+    h += "</div>"
+    return shell("plugins", "Plugins", body + h)
+}
+
+fn triggers(matches) {
+    var out = []
+    var i = 0
+    while i < len(matches) {
+        out.push(matches[i].trim())
+        i += 1
+    }
+    return out.join(", ")
+}
+
+// ------------------------------------------------------------------- usage
+
+export fn view_usage(st) {
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Usage</span>"],
+        "<span class=\"bar-date\">" + str(len(st["runs"])) + " tasks total</span>")
+
+    var h = "<div class=\"view view-usage\">"
+    h += "<h1 class=\"page-h\">Usage</h1>"
+    h += "<p class=\"page-lede\">What each bun has actually done: tasks, steps, tool calls, and the approvals it needed. Counted from the run log, so the numbers are the record.</p>"
+
+    h += "<div class=\"usage-grid\">"
+    var i = 0
+    while i < len(st["dots"]) {
+        let d = st["dots"][i]
+        let rs = dot_runs(st, d["id"])
+        var steps = 0
+        var tools = {}
+        var gates = 0
+        var refused = 0
+        var j = 0
+        while j < len(rs) {
+            let r = rs[j]
+            var k = 0
+            while k < len(r["steps"]) {
+                let s = r["steps"][k]
+                steps += 1
+                if tools[s["tool"]] == null {
+                    tools[s["tool"]] = 0
+                }
+                tools[s["tool"]] += 1
+                if s["risk"] == 1 {
+                    if s["state"] == "skipped" {
+                        refused += 1
+                    } else {
+                        gates += 1
+                    }
+                }
+                k += 1
+            }
+            j += 1
+        }
+        h += "<article class=\"usage-card\">" + glyph(d, 26)
+        h += "<p class=\"us-name\">" + esc(d["name"]) + "</p>"
+        h += "<dl class=\"us-stats\">"
+        h += "<div><dt>Tasks</dt><dd>" + str(len(rs)) + "</dd></div>"
+        h += "<div><dt>Steps</dt><dd>" + str(steps) + "</dd></div>"
+        h += "<div><dt>Gates</dt><dd>" + str(gates) + " approved · " + str(refused) + " refused</dd></div>"
+        h += "<div><dt>Top tool</dt><dd>" + esc(top_tool(tools)) + "</dd></div>"
+        h += "</dl>"
+        h += "</article>"
+        i += 1
+    }
+    h += "</div>"
+    h += "</div>"
+    return shell("usage", "Usage", body + h)
+}
+
+fn top_tool(tools) {
+    let keys = tools.keys()
+    if len(keys) == 0 {
+        return "—"
+    }
+    var best = keys[0]
+    var i = 1
+    while i < len(keys) {
+        if tools[keys[i]] > tools[best] {
+            best = keys[i]
+        }
+        i += 1
+    }
+    return best + " × " + str(tools[best])
+}
+
+fn opened_by(by) {
+    if by == "you" {
+        return "you"
+    }
+    return esc(by)
+}
+
+fn who_name(st, by) {
+    let d = dot_by_id(st, by)
+    if d != null {
+        return esc(d["name"])
+    }
+    return esc(by)
 }

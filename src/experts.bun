@@ -1,0 +1,166 @@
+// src/experts.bun — the expert library and bun hatching.
+//
+// Octop keeps a library of experts, each with a persona and a job description,
+// and lets a new agent be spawned from one. The persona here is a compact
+// MBTI-style profile: how the bun reads a request, what it overdoes, and the
+// two playbooks it leans on. Spawning makes a real dot with real spaces.
+
+import { commit, new_id, clip, slug } from "./store.bun"
+
+// 16 profiles, kept to one honest line each. The letters are the common
+// shorthand; the text is what a coworker would actually notice.
+let PERSONAS = {
+    "INTJ": { "reads": "Wants the strategy before the steps.", "overdoes": "Skips the pleasantries and the caveats." },
+    "INTP": { "reads": "Checks whether the question is the right one.", "overdoes": "Opens three side questions mid-task." },
+    "ENTJ": { "reads": "Turns any goal into a sequence with owners.", "overdoes": "Decides before the room agrees." },
+    "ENTP": { "reads": "Finds the second, better framing of the ask.", "overdoes": "Leaves drafts unfinished." },
+    "INFJ": { "reads": "Reads what the request is protecting.", "overdoes": "Polishes one sentence for too long." },
+    "INFP": { "reads": "Asks whose voice the document is in.", "overdoes": "Won't send until it feels true." },
+    "ENFJ": { "reads": "Puts the people on the thread first.", "overdoes": "Over-consults before acting." },
+    "ENFP": { "reads": "Sees the option nobody named.", "overdoes": "Chases the tangent that sparkled." },
+    "ISTJ": { "reads": "Checks the ledger before the plan.", "overdoes": "Re-verifies what was already verified." },
+    "ISFJ": { "reads": "Notices who will have to clean this up later.", "overdoes": "Carries work nobody asked it to carry." },
+    "ESTJ": { "reads": "Asks who signs and by when.", "overdoes": "Files the process before the work." },
+    "ESFJ": { "reads": "Keeps the team's rituals intact.", "overdoes": "Softens the hard sentence too far." },
+    "ISTP": { "reads": "Opens the thing to see how it works.", "overdoes": "Fixes what was not broken." },
+    "ISFP": { "reads": "Cares how the output feels to read.", "overdoes": "Redoes the layout one more time." },
+    "ESTP": { "reads": "Ships the smallest thing that answers it.", "overdoes": "Cuts the caution the task needed." },
+    "ESFP": { "reads": "Makes the boring thread worth reading.", "overdoes": "Performs when it should draft." }
+}
+
+export fn persona(code) {
+    return PERSONAS[code] ?? null
+}
+
+let TONES = ["#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#6366f1", "#ec4899", "#14b8a6"]
+
+// The catalog: eight experts a workspace actually wants. Each maps to the
+// playbooks the planner already has, so a hatched bun plans real work at once.
+let CATALOG = [
+    { "id": "scout-analyst", "name": "Vega", "code": "INTJ", "role": "Research analyst",
+      "blurb": "Reads three sources before saying one sentence. Writes briefs that survive a hostile reading.",
+      "playbook": "research" },
+    { "id": "ledger-analyst", "name": "Alto", "code": "ISTJ", "role": "Finance analyst",
+      "blurb": "Opens the sheet first, flags two rows, and never rounds a number without saying so.",
+      "playbook": "finance" },
+    { "id": "post-writer", "name": "Libra", "code": "INFJ", "role": "Communications",
+      "blurb": "Answers the question under the question. Leaves the hard one as a question, not a guess.",
+      "playbook": "comms" },
+    { "id": "forge-eng", "name": "Rook", "code": "ISTP", "role": "Engineering",
+      "blurb": "Reproduces, patches, tests, and only then opens the pull request.",
+      "playbook": "eng" },
+    { "id": "relay-ops", "name": "Nova", "code": "ESTJ", "role": "Operations",
+      "blurb": "Books the room, sends the invite, and tells you what it cannot unsend.",
+      "playbook": "ops" },
+    { "id": "market-watcher", "name": "Sirius", "code": "ENTP", "role": "Market watch",
+      "blurb": "Tracks competitors weekly and names the move behind the feature.",
+      "playbook": "research" },
+    { "id": "close-runner", "name": "Mira", "code": "ESFJ", "role": "Close runner",
+      "blurb": "Runs the month-end close checklist and chases the two people who are late.",
+      "playbook": "finance" },
+    { "id": "support-voice", "name": "Echo", "code": "ENFP", "role": "Support voice",
+      "blurb": "Turns an angry inbox thread into a reply that de-escalates without lying.",
+      "playbook": "comms" }
+]
+
+export fn experts() {
+    return CATALOG
+}
+
+export fn expert_by_id(id) {
+    var i = 0
+    while i < len(CATALOG) {
+        if CATALOG[i]["id"] == id {
+            return CATALOG[i]
+        }
+        i += 1
+    }
+    return null
+}
+
+// Hatching: a new dot with the expert's persona, its own thread, and one
+// memory of how it works. The id is derived from the expert id so repeat
+// hatches get unique ids but readable ones.
+export fn hatch(st, expert_id) {
+    let ex = expert_by_id(expert_id)
+    if ex == null {
+        return null
+    }
+    let per = persona(ex["code"])
+    var n = 0
+    var i = 0
+    var base = slug(ex["name"])
+    var dot_id = base
+    while dot_used(st, dot_id) {
+        n += 1
+        dot_id = base + "-" + str(n)
+    }
+    var dot = {
+        "id": dot_id,
+        "name": ex["name"],
+        "role": ex["role"],
+        "line": ex["blurb"],
+        "skills": [ex["role"], ex["playbook"] + " · default"],
+        "glyph": glyph_for(ex["playbook"]),
+        "tone": TONES[len(st["dots"]) % len(TONES)],
+        "status": "idle",
+        "now": "Hatched from the expert library. Say hello.",
+        "spaces": space_ids(st),
+        "persona": ex["code"],
+        "reads": per["reads"],
+        "overdoes": per["overdoes"],
+        "playbook": ex["playbook"]
+    }
+    st["dots"].push(dot)
+    var thread = {
+        "id": new_id("t"),
+        "dot": dot_id,
+        "title": "Hello from " + ex["name"],
+        "at": now(),
+        "messages": [
+            { "id": new_id("m"), "role": "dot", "at": now(),
+              "text": "I read requests like this: " + per["reads"] + " One habit you will notice: " + per["overdoes"] }
+        ]
+    }
+    st["threads"].push(thread)
+    st["events"].push({ "at": now(), "dot": dot_id, "text": "Hatched from expert “" + ex["role"] + "” (" + ex["code"] + ")" })
+    commit()
+    return dot
+}
+
+fn dot_used(st, id) {
+    var i = 0
+    while i < len(st["dots"]) {
+        if st["dots"][i]["id"] == id {
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+fn space_ids(st) {
+    var out = []
+    var i = 0
+    while i < len(st["spaces"]) {
+        out.push(st["spaces"][i]["id"])
+        i += 1
+    }
+    return out
+}
+
+fn glyph_for(playbook) {
+    if playbook == "finance" {
+        return "ledger"
+    }
+    if playbook == "comms" {
+        return "mail"
+    }
+    if playbook == "eng" {
+        return "forge"
+    }
+    if playbook == "ops" {
+        return "calendar"
+    }
+    return "search"
+}

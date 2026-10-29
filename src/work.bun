@@ -1,0 +1,163 @@
+// src/work.bun — artifacts and the board.
+//
+// Rakazo calls the durable outputs of a run "artifacts" and gives the human
+// work a "board" of tickets. Both ideas are small and both earn their place:
+// an artifact is evidence a run left behind that is not a page, and a ticket
+// is a promise a bun can pick up and finish in the open.
+
+import { new_id, clip, slug } from "./store.bun"
+
+// --------------------------------------------------------------- artifacts
+
+export fn artifact_new(st, kind, title, by, run_id, body) {
+    var a = {
+        "id": "a_" + str(len(st["artifacts"]) + 1) + "_" + str(int(now()) % 10000),
+        "kind": kind,
+        "title": title,
+        "by": by,
+        "run": run_id,
+        "at": now(),
+        "body": body
+    }
+    st["artifacts"].push(a)
+    return a
+}
+
+export fn artifact_by_id(st, id) {
+    var i = 0
+    while i < len(st["artifacts"]) {
+        if st["artifacts"][i]["id"] == id {
+            return st["artifacts"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn artifacts_of(st, dot_id) {
+    var out = []
+    var i = 0
+    while i < len(st["artifacts"]) {
+        if st["artifacts"][i]["by"] == dot_id {
+            out.push(st["artifacts"][i])
+        }
+        i += 1
+    }
+    return out
+}
+
+// The artifact body is the plain text of what the step was about to do.
+// Nothing here pretends a mail actually left: the body says "draft".
+export fn artifact_from_step(st, dot, run, s) {
+    var kind = "note"
+    if s["tool"] == "mail.send" {
+        kind = "mail"
+    } else if s["tool"] == "pr.open" {
+        kind = "pr"
+    } else if s["tool"] == "sheet.write" {
+        kind = "sheet"
+    } else if s["tool"] == "calendar.invite" {
+        kind = "event"
+    }
+    var lines = []
+    lines.push("Task: " + run["goal"])
+    lines.push("Step: " + s["label"])
+    if s["screen"]["lines"] != null {
+        var i = 0
+        while i < len(s["screen"]["lines"]) {
+            lines.push(str(s["screen"]["lines"][i]))
+            i += 1
+        }
+    }
+    lines.push("")
+    lines.push("Produced by " + dot["name"] + " after your approval. This copy lives in the workspace.")
+    return artifact_new(st, kind, s["screen"]["title"] ?? clip(s["label"], 48), dot["id"], run["id"], lines.join("\n"))
+}
+
+// ----------------------------------------------------------------- tickets
+
+export fn ticket_by_id(st, id) {
+    var i = 0
+    while i < len(st["tickets"]) {
+        if st["tickets"][i]["id"] == id {
+            return st["tickets"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn ticket_new(st, title, detail, by) {
+    var t = {
+        "id": "k_" + str(len(st["tickets"]) + 1) + "_" + str(int(now()) % 10000),
+        "title": title,
+        "detail": detail,
+        "status": "todo",
+        "by": by,
+        "run": null,
+        "at": now(),
+        "updated": now()
+    }
+    st["tickets"].push(t)
+    st["events"].push({ "at": now(), "dot": null, "text": "Ticket opened · " + clip(title, 56) })
+    return t
+}
+
+export fn ticket_move(st, id, status) {
+    let t = ticket_by_id(st, id)
+    if t == null {
+        return null
+    }
+    if status != "todo" and status != "doing" and status != "done" {
+        return null
+    }
+    t["status"] = status
+    t["updated"] = now()
+    return t
+}
+
+// A bun takes a ticket the way a coworker takes a card off the board: the
+// claim is a real task in a real thread, so the work plays out in public.
+export fn ticket_claim(st, id, dot_id) {
+    let t = ticket_by_id(st, id)
+    if t == null or t["status"] == "done" {
+        return null
+    }
+    var goal = t["title"]
+    if len(str(t["detail"]).trim()) > 0 {
+        goal = t["title"] + " — " + clip(t["detail"], 80)
+    }
+    var thread = {
+        "id": new_id("t"),
+        "dot": dot_id,
+        "title": "Ticket: " + clip(t["title"], 40),
+        "at": now(),
+        "messages": []
+    }
+    st["threads"].push(thread)
+    t["status"] = "doing"
+    t["run"] = "pending"
+    t["updated"] = now()
+    t["thread"] = thread["id"]
+    return { "ticket": t, "thread": thread, "goal": goal }
+}
+
+// Called by the engine when a run with a ticket finishes or is refused.
+export fn ticket_settle(st, run_id, done) {
+    var i = 0
+    while i < len(st["tickets"]) {
+        let t = st["tickets"][i]
+        if t["run"] == run_id {
+            if done {
+                t["status"] = "done"
+            } else {
+                t["status"] = "todo"
+                t["run"] = null
+            }
+            t["updated"] = now()
+            return t
+        }
+        i += 1
+    }
+    return null
+}

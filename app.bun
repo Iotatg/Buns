@@ -8,9 +8,11 @@ import { state, commit, reset, esc, new_id, clip } from "./src/store.bun"
 import { seed } from "./src/seed.bun"
 import { dot_by_id, page_by_id, space_by_id, run_by_id, thread_by_id, decide, send_message } from "./src/agent.bun"
 import { view_today, view_dot, view_spaces, view_space, view_page, view_search, view_about } from "./src/views.bun"
-import { view_tasks, view_memories, view_settings } from "./src/panels.bun"
+import { view_tasks, view_memories, view_settings, view_board, view_experts, view_plugins, view_usage, view_artifacts, view_artifact } from "./src/panels.bun"
 import { fire_due, add_schedule, delete_schedule, next_after } from "./src/schedule.bun"
 import { add_memory, update_memory, delete_memory } from "./src/memory.bun"
+import { ticket_new, ticket_by_id, ticket_move, ticket_claim, ticket_settle } from "./src/work.bun"
+import { hatch } from "./src/experts.bun"
 
 let PORT = int(getenv_or("PORT", "8801"))
 
@@ -76,12 +78,39 @@ fn ensure_thread(st, dot_id) {
     return latest
 }
 
-fn dot_page(st, id, focus, start_at) {
+fn dot_page(st, id, focus, start_at, thread_id) {
     let dot = dot_by_id(st, id)
     if dot == null {
         return null
     }
-    let thread = ensure_thread(st, id)
+    var thread = null
+    if thread_id != "" {
+        thread = thread_by_id(st, thread_id)
+        if thread != null and thread["dot"] != id {
+            thread = null
+        }
+    }
+    if thread == null {
+        thread = ensure_thread(st, id)
+    }
+    // Opening a bun's page is reading it: the unread count on the rail falls
+    // to zero because the count means "not read yet".
+    var i = 0
+    var dirty = false
+    while i < len(st["threads"]) {
+        let t = st["threads"][i]
+        if t["dot"] == id {
+            var seen = t["seen"] ?? 0
+            if seen != len(t["messages"]) {
+                t["seen"] = len(t["messages"])
+                dirty = true
+            }
+        }
+        i += 1
+    }
+    if dirty {
+        commit()
+    }
     return view_dot(st, dot, thread, focus, start_at)
 }
 
@@ -232,6 +261,17 @@ fn api_settings(req) {
     if body["notify_digest"] != null {
         s["notify_digest"] = body["notify_digest"] == true
     }
+    if body["rules"] != null {
+        if s["rules"] == null {
+            s["rules"] = { "auto_low": false, "always_ask_mail": true }
+        }
+        if body["rules"]["auto_low"] != null {
+            s["rules"]["auto_low"] = body["rules"]["auto_low"] == true
+        }
+        if body["rules"]["always_ask_mail"] != null {
+            s["rules"]["always_ask_mail"] = body["rules"]["always_ask_mail"] == true
+        }
+    }
     commit()
     return http_json(200, { "ok": true, "settings": s })
 }
@@ -323,6 +363,111 @@ fn api_new_page(req) {
     return http_json(200, { "ok": true, "id": page["id"], "space": space_id })
 }
 
+// ------------------------------------------------------- board and experts
+
+// POST /api/tickets — a human opens a card.
+fn api_ticket_new(req) {
+    let st = state()
+    let body = read_json(req)
+    let title = str(body["title"] ?? "").trim()
+    if len(title) == 0 {
+        return http_json(400, { "ok": false, "error": "A ticket needs a title." })
+    }
+    let t = ticket_new(st, title, str(body["detail"] ?? "").trim(), "you")
+    commit()
+    return http_json(200, { "ok": true, "ticket": t })
+}
+
+// POST /api/tickets/:id/claim — a bun takes the card and starts a real task.
+fn api_ticket_claim(req, ticket_id) {
+    let st = state()
+    let body = read_json(req)
+    let dot_id = body["dot"] ?? ""
+    if dot_by_id(st, dot_id) == null {
+        return http_json(404, { "ok": false, "error": "No such bun." })
+    }
+    let out = ticket_claim(st, ticket_id, dot_id)
+    if out == null {
+        return http_json(404, { "ok": false, "error": "No such ticket, or it is already done." })
+    }
+    let started = send_message(st, dot_id, out["thread"]["id"], out["goal"])
+    let run = started["run"]
+    out["ticket"]["run"] = run["id"]
+    run["ticket"] = out["ticket"]["id"]
+    // A short task finished before the link existed; settle it now so the
+    // card does not sit in doing forever.
+    if run["status"] == "done" {
+        ticket_settle(st, run["id"], true)
+    }
+    commit()
+    return http_json(200, { "ok": true, "task": run["id"], "thread": out["thread"]["id"], "status": run["status"] })
+}
+
+// POST /api/tickets/:id/move — the human moves a card by hand.
+fn api_ticket_move(req, ticket_id) {
+    let st = state()
+    let body = read_json(req)
+    let t = ticket_move(st, ticket_id, str(body["status"] ?? ""))
+    if t == null {
+        return http_json(400, { "ok": false, "error": "No such ticket or status." })
+    }
+    commit()
+    return http_json(200, { "ok": true, "ticket": t })
+}
+
+// POST /api/experts/:id/hatch — a new bun from the library.
+fn api_hatch(expert_id) {
+    let st = state()
+    let dot = hatch(st, expert_id)
+    if dot == null {
+        return http_json(404, { "ok": false, "error": "No such expert." })
+    }
+    return http_json(200, { "ok": true, "dot": dot["id"] })
+}
+
+// POST /api/threads/:id/fork — copy the thread up to a message and continue
+// the copy, leaving the original untouched.
+fn api_thread_fork(req, thread_id) {
+    let st = state()
+    let source = thread_by_id(st, thread_id)
+    if source == null {
+        return http_json(404, { "ok": false, "error": "No such thread." })
+    }
+    let body = read_json(req)
+    let upto = body["message"] ?? ""
+    var kept = []
+    var i = 0
+    var found = false
+    while i < len(source["messages"]) {
+        kept.push(source["messages"][i])
+        if upto != "" and source["messages"][i]["id"] == upto {
+            found = true
+            break
+        }
+        i += 1
+    }
+    if upto != "" and not found {
+        return http_json(400, { "ok": false, "error": "That message is not in this thread." })
+    }
+    var copy = {
+        "id": new_id("t"),
+        "dot": source["dot"],
+        "title": "Fork · " + clip(source["title"], 36),
+        "at": now(),
+        "messages": [],
+        "fork_of": thread_id
+    }
+    var j = 0
+    while j < len(kept) {
+        let m = kept[j]
+        copy["messages"].push({ "id": new_id("m"), "role": m["role"], "at": m["at"], "text": m["text"] })
+        j += 1
+    }
+    st["threads"].push(copy)
+    commit()
+    return http_json(200, { "ok": true, "thread": copy["id"] })
+}
+
 // ------------------------------------------------------------------ router
 
 fn route(req) {
@@ -398,6 +543,38 @@ fn route(req) {
         return api_new_page(req)
     }
 
+    if path.starts_with("/api/tickets/") and path.ends_with("/claim") {
+        if method != "POST" {
+            return http_json(405, { "ok": false, "error": "POST only." })
+        }
+        return api_ticket_claim(req, path[13:len(path) - 6])
+    }
+
+    if path.starts_with("/api/tickets/") and path.ends_with("/move") {
+        if method != "POST" {
+            return http_json(405, { "ok": false, "error": "POST only." })
+        }
+        return api_ticket_move(req, path[13:len(path) - 5])
+    }
+
+    if method == "POST" and path == "/api/tickets" {
+        return api_ticket_new(req)
+    }
+
+    if path.starts_with("/api/experts/") and path.ends_with("/hatch") {
+        if method != "POST" {
+            return http_json(405, { "ok": false, "error": "POST only." })
+        }
+        return api_hatch(path[13:len(path) - 6])
+    }
+
+    if path.starts_with("/api/threads/") and path.ends_with("/fork") {
+        if method != "POST" {
+            return http_json(405, { "ok": false, "error": "POST only." })
+        }
+        return api_thread_fork(req, path[13:len(path) - 5])
+    }
+
     if path.starts_with("/api/runs/") and path.ends_with("/decide") {
         if method != "POST" {
             return http_json(405, { "ok": false, "error": "POST only." })
@@ -451,6 +628,28 @@ fn route(req) {
     if parts[0] == "settings" {
         return http_html(200, view_settings(st))
     }
+    if parts[0] == "board" {
+        return http_html(200, view_board(st))
+    }
+    if parts[0] == "experts" {
+        return http_html(200, view_experts(st))
+    }
+    if parts[0] == "plugins" {
+        return http_html(200, view_plugins(st))
+    }
+    if parts[0] == "usage" {
+        return http_html(200, view_usage(st))
+    }
+    if parts[0] == "artifacts" and len(parts) == 1 {
+        return http_html(200, view_artifacts(st))
+    }
+    if parts[0] == "artifacts" and len(parts) == 2 {
+        let html = view_artifact(st, parts[1])
+        if html == null {
+            return http_text(404, "no such artifact")
+        }
+        return http_html(200, html)
+    }
     if parts[0] == "spaces" and len(parts) == 1 {
         return http_html(200, view_spaces(st))
     }
@@ -472,7 +671,8 @@ fn route(req) {
     if parts[0] == "buns" and len(parts) == 2 {
         let focus = req["query"]["run"] ?? ""
         let start_at = int(req["query"]["from"] ?? "0")
-        let html = dot_page(st, parts[1], focus, start_at)
+        let thread_id = req["query"]["thread"] ?? ""
+        let html = dot_page(st, parts[1], focus, start_at, thread_id)
         if html == null {
             return http_text(404, "no such bun")
         }
@@ -482,7 +682,8 @@ fn route(req) {
     if parts[0] == "dots" and len(parts) == 2 {
         let focus = req["query"]["run"] ?? ""
         let start_at = int(req["query"]["from"] ?? "0")
-        let html = dot_page(st, parts[1], focus, start_at)
+        let thread_id = req["query"]["thread"] ?? ""
+        let html = dot_page(st, parts[1], focus, start_at, thread_id)
         if html == null {
             return http_text(404, "no such bun")
         }

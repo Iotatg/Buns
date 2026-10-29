@@ -130,6 +130,12 @@ fn migrate(st) {
     if st["schedules"] == null {
         st["schedules"] = []
     }
+    if st["artifacts"] == null {
+        st["artifacts"] = []
+    }
+    if st["tickets"] == null {
+        st["tickets"] = []
+    }
     if st["events"] == null {
         st["events"] = []
     }
@@ -139,12 +145,19 @@ fn migrate(st) {
             "compact": false,
             "notify_gates": true,
             "notify_digest": false,
+            "rules": {
+                "auto_low": false,
+                "always_ask_mail": true
+            },
             "integrations": {
                 "slack": "Not connected",
                 "gmail": "Not connected",
                 "mcp": "Not connected"
             }
         }
+    }
+    if st["settings"]["rules"] == null {
+        st["settings"]["rules"] = { "auto_low": false, "always_ask_mail": true }
     }
     return st
 }

@@ -421,7 +421,11 @@
         name: $('input[name="name"]', settingsForm).value,
         tz_label: $('input[name="tz_label"]', settingsForm).value,
         notify_gates: $('input[name="notify_gates"]').checked,
-        notify_digest: $('input[name="notify_digest"]').checked
+        notify_digest: $('input[name="notify_digest"]').checked,
+        rules: {
+          auto_low: $('input[name="rules_auto_low"]').checked,
+          always_ask_mail: $('input[name="rules_always_ask_mail"]').checked
+        }
       };
       const { ok } = await put('/api/settings', data, 'PATCH');
       if (stateEl) {
@@ -450,6 +454,62 @@
         button.disabled = true;
         const res = await fetch('/api/schedules/' + button.dataset.schDel, { method: 'DELETE' });
         if (res.ok) location.reload(); else button.disabled = false;
+      });
+    });
+  }
+
+  /* ----------------------------------------------------------------- board */
+
+  const ticketForm = $('[data-ticket-form]');
+  if (ticketForm) {
+    ticketForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const title = $('input[name="title"]', ticketForm).value.trim();
+      if (!title) return;
+      const detail = $('input[name="detail"]', ticketForm).value.trim();
+      const { ok } = await post('/api/tickets', { title, detail });
+      if (ok) location.reload();
+    });
+    $$('[data-claim-dot]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const ticket = button.closest('[data-claim]').dataset.claim;
+        const { ok, data } = await post('/api/tickets/' + ticket + '/claim', { dot: button.dataset.claimDot });
+        if (ok) location.href = '/buns/' + button.dataset.claimDot + '?run=' + encodeURIComponent(data.task) + '&from=0';
+        else button.disabled = false;
+      });
+    });
+    $$('[data-ticket-move]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const { ok } = await post('/api/tickets/' + button.dataset.id + '/move', { status: button.dataset.ticketMove });
+        if (ok) location.reload(); else button.disabled = false;
+      });
+    });
+  }
+
+  /* --------------------------------------------------------------- experts */
+
+  $$('[data-hatch]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      button.textContent = 'Hatching…';
+      const { ok, data } = await post('/api/experts/' + button.dataset.hatch + '/hatch', {});
+      if (ok) location.href = '/buns/' + data.dot; else { button.disabled = false; button.textContent = 'Try again'; }
+    });
+  });
+
+  /* ------------------------------------------------------------------ fork */
+
+  const threadEl = $('[data-thread]');
+  if (threadEl) {
+    $$('[data-fork]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const dotId = $('.view-dot').dataset.dot;
+        const { ok, data } = await post('/api/threads/' + threadEl.dataset.thread + '/fork', { message: button.dataset.fork });
+        if (ok) location.href = '/buns/' + dotId + '?thread=' + encodeURIComponent(data.thread);
+        else button.disabled = false;
       });
     });
   }

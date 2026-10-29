@@ -29,6 +29,9 @@ let ICONS = {
     "bolt": "M13 3L5 14h6l-1 7 8-11h-6z",
     "clock": "M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2",
     "shield": "M12 3l8 3v6c0 5-4 8-8 9-4-1-8-4-8-9V6z",
+    "kanban": "M4 4h5v12H4zM10 4h5v8h-5zM16 4h4v15h-4z",
+    "spark": "M12 3l2.2 6.2L20 11l-5.8 1.8L12 19l-2.2-6.2L4 11l5.8-1.8z",
+    "chart": "M4 20V9M10 20V4M16 20v-8M22 20H2",
     "gear": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"
 }
 
@@ -298,10 +301,14 @@ fn rail(active) {
         if active == d["id"] {
             cls += " is-on"
         }
+        let unread = dot_unread(st, d["id"])
         out += "<a class=\"" + cls + "\" href=\"/buns/" + d["id"] + "\">"
         out += glyph(d, 26)
         out += "<span class=\"dot-id\"><span class=\"dot-name\">" + esc(d["name"]) + status_dot(d["status"]) + "</span>"
         out += "<span class=\"dot-sub\">" + esc(clip(d["now"], 30)) + "</span></span>"
+        if unread > 0 {
+            out += "<span class=\"dot-unread\">" + str(unread) + "</span>"
+        }
         out += "</a>"
         i += 1
     }
@@ -310,7 +317,12 @@ fn rail(active) {
     out += "<nav class=\"rail-sec\" aria-label=\"Workspace\">"
     out += "<div class=\"rail-head\"><span>Workspace</span></div>"
     out += wl_row("/tasks", "Tasks", active == "tasks", "check")
+    out += wl_row("/board", "Board", active == "board", "kanban")
+    out += wl_row("/artifacts", "Artifacts", active == "artifacts", "doc")
     out += wl_row("/memories", "Memories", active == "memories", "doc")
+    out += wl_row("/experts", "Experts", active == "experts", "spark")
+    out += wl_row("/plugins", "Plugins", active == "plugins", "gear")
+    out += wl_row("/usage", "Usage", active == "usage", "chart")
     out += wl_row("/settings", "Settings", active == "settings", "gear")
     out += "</nav>"
 
@@ -393,4 +405,23 @@ export fn bar(crumbs, actions) {
 export fn meta_line(dot, at) {
     return "<span class=\"meta-dot\" style=\"--tone:" + dot["tone"] + "\"></span>"
         + "<span>" + esc(dot["name"]) + "</span><span class=\"meta-sep\">·</span><span>" + ago(at) + "</span>"
+}
+
+// Unread = messages the thread holds beyond what this person has seen.
+// A thread never visited has seen nothing at all.
+fn dot_unread(st, dot_id) {
+    var total = 0
+    var i = 0
+    while i < len(st["threads"]) {
+        let t = st["threads"][i]
+        if t["dot"] == dot_id {
+            var seen = t["seen"] ?? 0
+            total += len(t["messages"]) - seen
+        }
+        i += 1
+    }
+    if total < 0 {
+        return 0
+    }
+    return total
 }

@@ -1,0 +1,129 @@
+// src/plugins.bun — the plugin surface.
+//
+// Octop defines three plugin kinds — tool, skill, hook — and ships a folder of
+// small bundled tools. The tool contract survives the trip to Buns almost
+// unchanged: a manifest, a match rule, and a handler that turns the request
+// into a step with a screen. There is no zip installer here because there is
+// no filesystem surface worth exposing; the bundled tools are the honest
+// version of that story.
+
+import { clip, slug } from "./store.bun"
+
+fn round2(x) {
+    // The language ships no rounding builtin; two decimals is all the UI shows.
+    return int(x * 100 + 0.5) / 100.0
+}
+
+// Each plugin: an id, a kind, the goal words it answers to, and a run() that
+// returns the screen dict for its step. Everything is deterministic — these
+// are demonstrations of the contract, not fake live services.
+let PLUGINS = [
+    {
+        "id": "weather",
+        "kind": "tool",
+        "name": "Weather",
+        "desc": "A five-day outlook for a named city. Deterministic sample data, clearly labelled.",
+        "match": ["weather", "forecast", "rain"],
+        "run": fn(goal) {
+            var city = "Aurelia"
+            var words = str(goal).split(" ")
+            var i = 0
+            while i < len(words) - 1 {
+                if words[i].lower() == "in" and len(words[i + 1]) > 2 {
+                    city = words[i + 1]
+                }
+                i += 1
+            }
+            var days = ["Mon 21° clear", "Tue 19° overcast", "Wed 17° light rain", "Thu 18° showers", "Fri 22° clear"]
+            return { "kind": "doc", "title": "Weather — " + city, "url": "buns://weather/" + slug(city),
+                     "lines": ["5-day outlook (sample data, no live feed)"] + days }
+        }
+    },
+    {
+        "id": "unit-convert",
+        "kind": "tool",
+        "name": "Unit convert",
+        "desc": "Converts lengths, weights, and temperatures inside a sentence.",
+        "match": ["convert", " km ", " miles", " celsius", " fahrenheit"],
+        "run": fn(goal) {
+            var g = str(goal)
+            var out = []
+            var n = num_in(g)
+            if n != null and g.lower().contains("km") {
+                out.push(str(n) + " km = " + str(round2(n * 0.621371)) + " miles")
+                out.push(str(n) + " km = " + str(int(n * 1000)) + " m")
+            } else if n != null and (g.lower().contains("celsius") or g.lower().contains("°c")) {
+                out.push(str(n) + " °C = " + str(int(n * 9 / 5 + 32 + 0.5)) + " °F")
+            } else if n != null {
+                out.push(str(n) + " miles = " + str(round2(n * 1.609344)) + " km")
+            } else {
+                out.push("No number found to convert. Write it as “120 km to miles”.")
+            }
+            return { "kind": "doc", "title": "Conversion", "url": "buns://convert", "lines": out }
+        }
+    },
+    {
+        "id": "github-trending",
+        "kind": "tool",
+        "name": "GitHub trending",
+        "desc": "A sample trending list so the pipeline can be tested without a live API.",
+        "match": ["trending", "github"],
+        "run": fn(goal) {
+            return { "kind": "doc", "title": "GitHub trending (sample)", "url": "buns://trending",
+                     "lines": ["Sample data, not a live call.",
+                               "1. bun-lang/buns — the runtime this workspace is written in",
+                               "2. copilotkit/opendots — the product this workspace studies",
+                               "3. morluto/rea — the study lens used for both"] }
+        }
+    }
+]
+
+export fn plugins() {
+    return PLUGINS
+}
+
+// The one function the planner calls. Returns the plugin, or null.
+export fn plugin_for(goal) {
+    let g = " " + str(goal).lower() + " "
+    var i = 0
+    while i < len(PLUGINS) {
+        let p = PLUGINS[i]
+        var j = 0
+        while j < len(p["match"]) {
+            if g.contains(p["match"][j]) {
+                return p
+            }
+            j += 1
+        }
+        i += 1
+    }
+    return null
+}
+
+fn num_in(text) {
+    var words = str(text).replace(",", " ").split(" ")
+    var i = 0
+    while i < len(words) {
+        var w = words[i]
+        var ok = true
+        var dots = 0
+        var j = 0
+        while j < len(w) {
+            let c = w[j]
+            if c == "." {
+                dots += 1
+                if dots > 1 {
+                    ok = false
+                }
+            } else if c < "0" or c > "9" {
+                ok = false
+            }
+            j += 1
+        }
+        if ok and dots <= 1 and len(w) > 0 {
+            return float(w)
+        }
+        i += 1
+    }
+    return null
+}

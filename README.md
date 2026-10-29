@@ -1,6 +1,6 @@
 # Buns
 
-A small, stateful AI-coworker workspace written in the **Bun language**. Buns is a from-scratch, feature-aligned study of [OpenDots](https://github.com/CopilotKit/OpenDots): persistent buns (Dots), visible tasks (runs), scheduled activity, memories, human approval gates, a document library, and a computer view that follows each tool call.
+A small, stateful AI-coworker workspace written in the **Bun language**. Buns studies [OpenDots](https://github.com/CopilotKit/OpenDots) for its task-and-approval core, then takes its second surface from two more sources: the **board, artifacts, and dark interface language** of [Rakazo](https://github.com/elie222/rakazo), and the **expert library, personas, and plugin contract** of [TencentCloud's Octop](https://github.com/TencentCloud/Octop).
 
 The entire application is `.bun`, HTML, CSS, and vanilla JavaScript. There is **no framework, bundler, package install, database, or JavaScript runtime** in the server.
 
@@ -18,7 +18,15 @@ The entire application is `.bun`, HTML, CSS, and vanilla JavaScript. There is **
 - **Real approval gates** stop risky steps. Approving applies the effect; refusing records a skip. A finished task cannot be decided twice.
 - **Settings** holds workspace preferences and an honest list of what is not connected.
 - **Spaces and pages** include search, grid/list views, nested pages, Markdown rendering, page creation, and revision-checked autosave.
-- **Command bar** (`Ctrl/Cmd + K`) jumps anywhere in the workspace.
+- **Board** — tickets anyone opens, a bun claims, and the engine settles: a claim starts a real task in a real thread, and finishing the task moves the card.
+- **Artifacts** — every approved effect leaves a readable copy: the mail that went out, the pull request, the sheet change.
+- **Experts** — an Octop-style library of eight experts with MBTI-style personas; hatching one adds a real bun to the rail with its own thread and memory.
+- **Plugins** — the tool/skill/hook contract from Octop, kept to its bundled tools: weather, unit conversion, and trending, each running as a visible step.
+- **Approval rules** — a rule can pre-approve non-mail gates; mail always asks. Auto-approvals are logged like human decisions.
+- **Usage** — tasks, steps, tool distribution, and gate outcomes per bun, counted from the run log.
+- **Thread fork** — branch a conversation at any message and continue the copy.
+- **Unread counts** on the rail, and a command bar (`Ctrl/Cmd + K`) that reaches every page.
+- **Rakazo-aligned dark UI** — near-black sidebar and cards, one status blue, a 12px radius, with Buns' serif narrative voice kept.
 - **Responsive UI** works at desktop and phone widths. The computer becomes a drawer on smaller screens.
 - **Persistent state** lives in one JSON document behind a mutex, migrated forward when new collections ship.
 
@@ -61,8 +69,11 @@ Delete the state file and restart to restore the seed. Do not expose this build 
 3. Choose **Refuse** or **Approve and continue** on the `mail.send` gate.
 4. Ask Scout: `Brief me on freight costs` and watch a new task play — its first step is the memory it recalled.
 5. Open **Tasks** and schedule `Review the pipeline` daily for Ledger; it fires on its own from then on.
-6. Open **Spaces**, create a page, and edit it. Saves carry a revision; stale writes return `409` instead of overwriting another edit.
-7. Press `Ctrl/Cmd + K` and type a place.
+6. Open **Board**, open a ticket, and hand it to a bun — the claim becomes a task, and the card moves when the task ends.
+7. Open **Experts** and hatch Vega; the new bun appears on the rail with its own thread.
+8. Ask Relay: `Check the weather in Mumbai` — a bundled plugin runs as a visible step.
+9. Open **Spaces**, create a page, and edit it. Saves carry a revision; stale writes return `409` instead of overwriting another edit.
+10. Press `Ctrl/Cmd + K` and type a place.
 
 ## Verify
 
@@ -71,7 +82,7 @@ Delete the state file and restart to restore the seed. Do not expose this build 
 sh scripts/smoke.sh
 ```
 
-The smoke suite starts an isolated server on port `8802` with a temporary state file. It covers routing, assets, errors, message/task creation, decision replay protection, tasks, schedules, memories, settings, page creation, revision conflicts, and saving: **63 assertions**.
+The smoke suite starts an isolated server on port `8802` with a temporary state file. It covers routing, assets, errors, message/task creation, decision replay protection, tasks, schedules, memories, settings, page creation, revision conflicts, and saving, plus the board, artifacts, experts, plugins, usage, approval rules, thread fork, and unread handling: **96 assertions**.
 
 `scripts/test_engine.bun` exercises the planner and run engine directly.
 
@@ -83,7 +94,12 @@ The smoke suite starts an isolated server on port `8802` with a temporary state 
 | `/buns/:id` | One bun: thread, tasks, approval gates, computer (`/dots/:id` kept working) |
 | `/tasks` | Task ledger, schedules, activity feed |
 | `/memories` | What each bun keeps, with add, edit, and delete |
-| `/settings` | Workspace, notifications, integrations status |
+| `/board` | Ticket board: to do, in progress, done |
+| `/artifacts`, `/artifacts/:id` | Audit copies of approved effects |
+| `/experts` | Expert library and bun hatching |
+| `/plugins` | The bundled tool plugins and their contract |
+| `/usage` | Tasks, steps, tools, and gates per bun |
+| `/settings` | Workspace, notifications, approval rules, integrations status |
 | `/spaces` | Space and page library |
 | `/spaces/:id` | One space and its documents |
 | `/spaces/:id/p/:page` | Markdown page and editor |
@@ -106,6 +122,9 @@ API, aligned with the OpenDots surface:
 | `POST /api/messages` | Chat-shaped task start (kept from the first build) |
 | `POST /api/runs/:id/decide` | Legacy alias for approve/refuse |
 | `POST /api/pages`, `PATCH /api/pages/:id` | Page create and revision-checked save |
+| `POST /api/tickets`, `POST /api/tickets/:id/claim`, `POST /api/tickets/:id/move` | Board tickets |
+| `POST /api/experts/:id/hatch` | Spawn a bun from the expert library |
+| `POST /api/threads/:id/fork` | Fork a thread at a message |
 
 ## Source map
 
@@ -114,10 +133,13 @@ app.bun             router, JSON API, static assets
 src/http.bun        raw-socket HTTP/1.1, keep-alive, chunked responses
 src/store.bun       state, clock, ids, migration, escaping, text helpers
 src/seed.bun        Aurelia workspace, memories, schedules, realistic sources
-src/agent.bun       planner, five playbooks, tools, gates, effects, recall step
+src/agent.bun       planner, five playbooks, plugins, rules, gates, effects, recall step
 src/memory.bun      memory CRUD and word-overlap recall
 src/schedule.bun    cadence maths, schedule CRUD, fire-on-read
-src/panels.bun      Tasks, Memories, and Settings views
+src/work.bun        artifacts and the ticket board
+src/experts.bun     expert catalog, MBTI personas, bun hatching
+src/plugins.bun     the tool plugin contract and bundled tools
+src/panels.bun      Tasks, Board, Artifacts, Experts, Plugins, Usage, Memories, Settings
 src/ui.bun          shell, rail, icons, Markdown renderer, shared components
 src/views.bun       Today, thread, spaces, pages, generated computer screens
 assets/app.css      visual system and responsive layout
@@ -134,6 +156,8 @@ This is a working product study, not a connected production agent:
 - Computer screens are generated from actual workspace state; **no real browser is automated**.
 - Mail, pull requests, and calendar effects update local JSON; **no external service is contacted**.
 - Scheduled tasks fire when a page is read, not from a background daemon.
+- Plugin tools run on deterministic sample data, labelled as such on their screens.
+- Hatched buns use the same deterministic planner; the persona shapes defaults, not a model.
 - Integrations in Settings are labelled **Not connected** because they are.
 - There is one local workspace and no authentication.
 - A crash during the single JSON write can damage state; keep backups if the data matters.
@@ -142,9 +166,7 @@ OpenDots areas still not modelled here: voice, real computer control and takeove
 
 ## Research and design
 
-OpenDots was studied at commit `8091324`. [rea](https://github.com/morluto/rea) was used as a lens for evidence-based application analysis: trace interface elements to routes and behavior, and distinguish observed behavior from assumptions. The visual rules and anti-pattern checks come from [impeccable](https://github.com/pbakaus/impeccable).
-
-See [DESIGN.md](DESIGN.md) for the design reasoning and architecture decisions.
+See [DESIGN.md](DESIGN.md) for the design reasoning, the alignment tables, and what each source contributed and what was cut.
 
 ## License
 

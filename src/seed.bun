@@ -760,6 +760,10 @@ export fn seed() {
         "compact": false,
         "notify_gates": true,
         "notify_digest": false,
+        "rules": {
+            "auto_low": false,
+            "always_ask_mail": true
+        },
         "integrations": {
             "slack": "Not connected",
             "gmail": "Not connected",
@@ -772,6 +776,30 @@ export fn seed() {
         { "at": t - 3600 * 2, "dot": "scout", "text": "Finished · Brief me on the mid-market buyer before Thursday." },
         { "at": t - 3600 * 5, "dot": "post", "text": "Started · Draft replies to the three pricing questions." },
         { "at": t - 86400 * 2, "dot": "forge", "text": "Finished · Fix the export to fail closed on a partial write." }
+    ]
+    st["artifacts"] = [
+        {
+            "id": "a_seed_pr", "kind": "pr", "title": "Pull request — fail closed on a partial export",
+            "by": "forge", "run": "r_seed_scout", "at": t - 86400 * 2,
+            "body": "Task: Fix the export to fail closed on a partial write.\nStep: Open the pull request\nFix: fail closed on a partial export\n2 files changed, +24 −6\nReviewers: Dana, Marcus\n\nProduced by Forge after your approval. This copy lives in the workspace."
+        }
+    ]
+    st["tickets"] = [
+        {
+            "id": "k_seed_1", "title": "Pull the September close numbers into one page",
+            "detail": "Ledger has most of it in memory; the page should live in ops.",
+            "status": "todo", "by": "you", "run": null, "at": t - 5400, "updated": t - 5400
+        },
+        {
+            "id": "k_seed_2", "title": "Check the weather window for the launch shoot",
+            "detail": "Outdoor shots on the 14th; need two clear days.",
+            "status": "todo", "by": "you", "run": null, "at": t - 3600, "updated": t - 3600
+        },
+        {
+            "id": "k_seed_3", "title": "Archive the old pricing page",
+            "detail": "Replaced by the new table; keep the URL working.",
+            "status": "done", "by": "you", "run": null, "at": t - 86400 * 3, "updated": t - 86400 * 2
+        }
     ]
     st["seq"] = 100
     return st
