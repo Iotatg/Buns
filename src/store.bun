@@ -121,6 +121,34 @@ export fn new_id(prefix) {
 
 // ------------------------------------------------------------------ state
 
+// A workspace written by an older build may not have the newer collections.
+// Migration fills in the defaults once, at load, and never throws away data.
+fn migrate(st) {
+    if st["memories"] == null {
+        st["memories"] = []
+    }
+    if st["schedules"] == null {
+        st["schedules"] = []
+    }
+    if st["events"] == null {
+        st["events"] = []
+    }
+    if st["settings"] == null {
+        st["settings"] = {
+            "tz_label": "IST",
+            "compact": false,
+            "notify_gates": true,
+            "notify_digest": false,
+            "integrations": {
+                "slack": "Not connected",
+                "gmail": "Not connected",
+                "mcp": "Not connected"
+            }
+        }
+    }
+    return st
+}
+
 export fn state() {
     if LOADED {
         return STATE
@@ -129,6 +157,9 @@ export fn state() {
     if not LOADED {
         if file_exists(PATH) {
             STATE = json_parse(read_file(PATH))
+            if len(STATE.keys()) > 0 {
+                STATE = migrate(STATE)
+            }
         } else {
             STATE = {}
         }

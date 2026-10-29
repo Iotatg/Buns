@@ -93,5 +93,54 @@ SAVED=$(curl -s -X PATCH -H 'content-type: application/json' -d '{"body":"## Edi
 has   'a current revision saves' "$SAVED" '"rev": 2'
 check 'GET on a page endpoint is a 405' "$(code "$BASE/api/pages/$PAGE")" "405"
 
+# The OpenDots views: tasks, memories, settings, and the new bun path.
+check 'the tasks page answers' "$(code $BASE/tasks)" "200"
+has   'the tasks page lists schedules' "$(body $BASE/tasks)" 'Scheduled'
+has   'the tasks page shows activity' "$(body $BASE/tasks)" 'Activity'
+check 'the memories page answers' "$(code $BASE/memories)" "200"
+has   'the memories page shows a seed memory' "$(body $BASE/memories)" 'Entity C splits freight'
+check 'the settings page answers' "$(code $BASE/settings)" "200"
+has   'the settings page admits what is not connected' "$(body $BASE/settings)" 'Not connected'
+check 'a bun answers at /buns/' "$(code $BASE/buns/scout)" "200"
+check 'the old /dots/ path still answers' "$(code $BASE/dots/scout)" "200"
+check 'api state answers' "$(code $BASE/api/state)" "200"
+has   'api state has memories' "$(body $BASE/api/state)" '"memories"'
+has   'api state has schedules' "$(body $BASE/api/state)" '"schedules"'
+
+# Tasks: create, fetch, act on.
+TASK=$(json POST "$BASE/api/tasks" '{"dot":"relay","goal":"Book the reference call with Marcus"}')
+has   'a task can be created' "$TASK" '"ok": true'
+TASKID=$(printf '%s' "$TASK" | sed -e 's/.*"task": "//' -e 's/".*//')
+check 'the task is fetchable' "$(code $BASE/api/tasks/$TASKID)" "200"
+has   'the task recalls a memory first' "$(body $BASE/api/tasks/$TASKID)" 'memory.recall'
+check 'a task without a goal is a 400' "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"dot":"scout"}' $BASE/api/tasks)" "400"
+check 'a task for a missing bun is a 404' "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"dot":"nobody","goal":"x"}' $BASE/api/tasks)" "404"
+check 'an unknown action is a 400' "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"action":"nope"}' $BASE/api/tasks/r_seed_scout/actions)" "400"
+check 'approving a task that is not waiting is a 409' "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"action":"approve"}' $BASE/api/tasks/r_seed_scout/actions)" "409"
+check 'a response is recorded' "$(curl -s -X POST -H 'content-type: application/json' -d '{"action":"respond","text":"Friday instead."}' $BASE/api/tasks/r_seed_post/actions)" '{"ok": true}'
+check 'a response without text is a 400' "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"action":"respond"}' $BASE/api/tasks/r_seed_post/actions)" "400"
+
+# Schedules.
+SCH=$(json POST "$BASE/api/tasks" '{"dot":"ledger","goal":"Review the pipeline","schedule":{"cadence":"daily"}}')
+has   'a schedule can be created' "$SCH" '"cadence": "daily"'
+SCHID=$(printf '%s' "$SCH" | sed -e 's/.*"id": "//' -e 's/".*//')
+check 'a schedule can be removed' "$(curl -s -X DELETE $BASE/api/schedules/$SCHID)" '{"ok": true}'
+check 'a missing schedule is a 404' "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $BASE/api/schedules/sch_nope)" "404"
+has   'PUT schedule on a task works' "$(curl -s -X PUT -H 'content-type: application/json' -d '{"cadence":"weekly"}' $BASE/api/tasks/r_seed_scout/schedule)" '"cadence": "weekly"'
+
+# Memories: create, update, delete.
+MEM=$(json POST "$BASE/api/memories" '{"dot":"scout","text":"Buyers read the pricing table longer."}')
+has   'a memory can be created' "$MEM" '"source": "manual"'
+MEMID=$(printf '%s' "$MEM" | sed -e 's/.*"id": "//' -e 's/".*//')
+has   'a memory can be updated' "$(curl -s -X PUT -H 'content-type: application/json' -d '{"text":"revised"}' $BASE/api/memories/$MEMID)" '"text": "revised"'
+check 'a memory can be deleted' "$(curl -s -X DELETE $BASE/api/memories/$MEMID)" '{"ok": true}'
+check 'a missing memory is a 404' "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $BASE/api/memories/mem_nope)" "404"
+check 'an empty memory is a 400' "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"dot":"scout","text":"  "}' $BASE/api/memories)" "400"
+
+# Settings.
+SET=$(curl -s -X PATCH -H 'content-type: application/json' -d '{"notify_gates":false,"tz_label":"IST"}' $BASE/api/settings)
+has   'settings can be patched' "$SET" '"notify_gates": false'
+check 'GET on settings is a 405' "$(code $BASE/api/settings)" "405"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

@@ -13,6 +13,23 @@ The core loop is **ask → inspect the run → approve or refuse → keep the ar
 
 ## What the source research changed
 
+The second pass through the OpenDots source turned a study into an alignment. Three facts from the code drove the work: the client recognises exactly four views (`chat`, `tasks`, `memories`, `space`) plus `settings` and `schedule` dialogs; the server exposes `/api/state`, `/api/tasks` with `:id/actions` and `:id/schedule`, `/api/settings`, and `/api/memories`; and a task carries its schedule, its actions, and its computer steps in one object.
+
+Buns now mirrors that surface view for view and endpoint for endpoint, while keeping its own implementation:
+
+| OpenDots | Buns | Note |
+| --- | --- | --- |
+| Dots | **Buns** | Same idea, own name; `/buns/:id` with `/dots/:id` still resolving |
+| `chat` view | Bun thread with composer and run playback | Unchanged from the first build |
+| `tasks` view | `/tasks` ledger: waiting, in progress, scheduled, finished, activity | Backed by `GET /api/state`, `POST /api/tasks`, `GET /api/tasks/:id`, `POST /api/tasks/:id/actions` |
+| Task schedules | `PUT /api/tasks/:id/schedule`, `DELETE /api/schedules/:id` | Cadence maths in `src/schedule.bun`; fires on read |
+| `memories` view | `/memories` with full CRUD | `POST/PUT/DELETE /api/memories`; a finished task writes one automatically and the next plan recalls up to three as its first, visible step |
+| `settings` dialog | `/settings` page + `PATCH /api/settings` | Integrations listed as **Not connected**, honestly |
+| Human approvals | Gate state machine, approve/refuse/respond | `respond` is the OpenDots action for talking back mid-task |
+| Spaces and pages | `/spaces` library | Unchanged |
+| Voice, takeover, live integrations | Deliberately absent | Named in README and Settings, not stubbed |
+
+
 OpenDots was cloned and read at commit `8091324`, especially `README.md`, `src/client/App.tsx`, `src/client/Chat.tsx`, and `src/client/PageDocument.tsx`. The confirmed source model includes Dots, Spaces, recent chats, human-in-the-loop cards, an embedded Computer view, scheduled activity, memories, and settings.
 
 Buns adopts the durable Dot thread, document library, approval card, and Computer relationship. It deliberately differs in two ways:
@@ -20,7 +37,7 @@ Buns adopts the durable Dot thread, document library, approval card, and Compute
 - **Today** is a Buns-specific command center for decisions and recent work.
 - **Run playback** makes the sequence and timing legible even though the local planner completes synchronously.
 
-OpenDots features not implemented here—voice, memories, schedules, real browser control, external integrations—are listed as boundaries rather than implied by inactive controls.
+OpenDots features not modelled here—voice, real browser control and takeover, and live integrations—are listed as boundaries rather than implied by inactive controls.
 
 rea was cloned at `1ef5918`. It is a reverse-engineering MCP/CLI, not an OpenDots dependency. Its useful discipline is evidence: connect UI claims to routes and implementation, record limitations, and never confuse a visible element with a working integration.
 

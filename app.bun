@@ -4,10 +4,13 @@
 // src/http.bun: raw sockets, keep-alive, chunked responses, no framework.
 
 import { http_listen, http_serve_forever, http_html, http_json, http_text } from "./src/http.bun"
-import { state, commit, reset, esc, new_id } from "./src/store.bun"
+import { state, commit, reset, esc, new_id, clip } from "./src/store.bun"
 import { seed } from "./src/seed.bun"
-import { dot_by_id, page_by_id, space_by_id, run_by_id, decide, send_message } from "./src/agent.bun"
+import { dot_by_id, page_by_id, space_by_id, run_by_id, thread_by_id, decide, send_message } from "./src/agent.bun"
 import { view_today, view_dot, view_spaces, view_space, view_page, view_search, view_about } from "./src/views.bun"
+import { view_tasks, view_memories, view_settings } from "./src/panels.bun"
+import { fire_due, add_schedule, delete_schedule, next_after } from "./src/schedule.bun"
+import { add_memory, update_memory, delete_memory } from "./src/memory.bun"
 
 let PORT = int(getenv_or("PORT", "8801"))
 
@@ -82,7 +85,7 @@ fn dot_page(st, id, focus, start_at) {
     return view_dot(st, dot, thread, focus, start_at)
 }
 
-// -------------------------------------------------------------------- api
+// ------------------------------------------------------------------ api
 
 fn read_json(req) {
     if len(req["body"]) == 0 {
@@ -95,17 +98,164 @@ fn read_json(req) {
     }
 }
 
+// GET /api/state — the whole workspace, as OpenDots serves it.
+fn api_state() {
+    return http_json(200, state())
+}
+
+// POST /api/tasks — start a task now, or attach a schedule to a goal.
+fn api_new_task(req) {
+    let st = state()
+    let body = read_json(req)
+    let dot_id = body["dot"] ?? ""
+    let goal = str(body["goal"] ?? "").trim()
+    if dot_id == "" or len(goal) == 0 {
+        return http_json(400, { "ok": false, "error": "A task needs a bun and a goal." })
+    }
+    if dot_by_id(st, dot_id) == null {
+        return http_json(404, { "ok": false, "error": "No such bun." })
+    }
+    if body["schedule"] != null {
+        let cadence = body["schedule"]["cadence"] ?? "daily"
+        let s = add_schedule(st, dot_id, goal, cadence, next_after(now(), cadence))
+        return http_json(200, { "ok": true, "schedule": s })
+    }
+    let out = send_message(st, dot_id, "", goal)
+    return http_json(200, { "ok": true, "task": out["run"]["id"], "thread": out["thread"]["id"], "status": out["run"]["status"] })
+}
+
+fn api_get_task(task_id) {
+    let st = state()
+    let run = run_by_id(st, task_id)
+    if run == null {
+        return http_json(404, { "ok": false, "error": "No such task." })
+    }
+    return http_json(200, { "ok": true, "task": run })
+}
+
+// POST /api/tasks/:id/actions — approve, refuse, or respond in the thread.
+fn api_task_actions(req, task_id) {
+    let st = state()
+    let body = read_json(req)
+    let action = str(body["action"] ?? "").lower()
+    let run = run_by_id(st, task_id)
+    if run == null {
+        return http_json(404, { "ok": false, "error": "No such task." })
+    }
+    if action == "approve" or action == "refuse" {
+        if run["status"] != "waiting" {
+            return http_json(409, { "ok": false, "error": "This task is not waiting for a decision." })
+        }
+        let out = decide(st, task_id, action == "approve")
+        return http_json(200, { "ok": true, "status": out["status"], "cursor": out["cursor"] })
+    }
+    if action == "respond" {
+        let text = str(body["text"] ?? "").trim()
+        if len(text) == 0 {
+            return http_json(400, { "ok": false, "error": "A response needs a sentence." })
+        }
+        let thread = thread_by_id(st, run["thread"])
+        if thread != null {
+            thread["messages"].push({ "id": new_id("m"), "role": "user", "at": now(), "text": text })
+            thread["at"] = now()
+        }
+        st["events"].push({ "at": now(), "dot": run["dot"], "text": "You replied on a task · " + clip(text, 56) })
+        commit()
+        return http_json(200, { "ok": true })
+    }
+    return http_json(400, { "ok": false, "error": "Actions are approve, refuse, or respond." })
+}
+
+// PUT /api/tasks/:id/schedule — make this task repeat.
+fn api_task_schedule(req, task_id) {
+    let st = state()
+    let run = run_by_id(st, task_id)
+    if run == null {
+        return http_json(404, { "ok": false, "error": "No such task." })
+    }
+    let body = read_json(req)
+    let cadence = body["cadence"] ?? "daily"
+    let s = add_schedule(st, run["dot"], run["goal"], cadence, next_after(now(), cadence))
+    return http_json(200, { "ok": true, "schedule": s })
+}
+
+fn api_memory_add(req) {
+    let st = state()
+    let body = read_json(req)
+    let dot_id = body["dot"] ?? ""
+    let text = str(body["text"] ?? "").trim()
+    if dot_by_id(st, dot_id) == null {
+        return http_json(404, { "ok": false, "error": "No such bun." })
+    }
+    if len(text) == 0 {
+        return http_json(400, { "ok": false, "error": "A memory needs a sentence." })
+    }
+    let m = add_memory(st, dot_id, text, "manual")
+    commit()
+    return http_json(200, { "ok": true, "memory": m })
+}
+
+fn api_memory_update(req, mem_id) {
+    let st = state()
+    let body = read_json(req)
+    let m = update_memory(st, mem_id, str(body["text"] ?? ""))
+    if m == null {
+        return http_json(404, { "ok": false, "error": "No such memory." })
+    }
+    commit()
+    return http_json(200, { "ok": true, "memory": m })
+}
+
+fn api_memory_delete(mem_id) {
+    let st = state()
+    if not delete_memory(st, mem_id) {
+        return http_json(404, { "ok": false, "error": "No such memory." })
+    }
+    commit()
+    return http_json(200, { "ok": true })
+}
+
+// PATCH /api/settings — merge the given keys; the workspace name too.
+fn api_settings(req) {
+    let st = state()
+    let body = read_json(req)
+    let s = st["settings"]
+    if body["name"] != null and len(str(body["name"]).trim()) > 0 {
+        st["workspace"]["name"] = str(body["name"]).trim()
+    }
+    if body["tz_label"] != null and len(str(body["tz_label"]).trim()) > 0 {
+        s["tz_label"] = str(body["tz_label"]).trim()
+    }
+    if body["notify_gates"] != null {
+        s["notify_gates"] = body["notify_gates"] == true
+    }
+    if body["notify_digest"] != null {
+        s["notify_digest"] = body["notify_digest"] == true
+    }
+    commit()
+    return http_json(200, { "ok": true, "settings": s })
+}
+
+fn api_delete_schedule(sched_id) {
+    let st = state()
+    if not delete_schedule(st, sched_id) {
+        return http_json(404, { "ok": false, "error": "No such schedule." })
+    }
+    return http_json(200, { "ok": true })
+}
+
+
 fn api_message(req) {
     let st = state()
     let body = read_json(req)
     let dot_id = body["dot"] ?? ""
     let text = body["text"] ?? ""
     if dot_id == "" or len(str(text).trim()) == 0 {
-        return http_json(400, { "ok": false, "error": "A message needs a coworker and a sentence." })
+        return http_json(400, { "ok": false, "error": "A message needs a bun and a sentence." })
     }
     let dot = dot_by_id(st, dot_id)
     if dot == null {
-        return http_json(404, { "ok": false, "error": "No such coworker." })
+        return http_json(404, { "ok": false, "error": "No such bun." })
     }
     let thread_id = body["thread"] ?? ""
     let out = send_message(st, dot_id, thread_id, str(text).trim())
@@ -187,6 +337,63 @@ fn route(req) {
         return api_message(req)
     }
 
+    if method == "GET" and path == "/api/state" {
+        return api_state()
+    }
+
+    if method == "POST" and (path == "/api/tasks" or path == "/api/schedules") {
+        return api_new_task(req)
+    }
+
+    if path.starts_with("/api/tasks/") {
+        let rest = path[11:]
+        if rest.ends_with("/actions") {
+            if method != "POST" {
+                return http_json(405, { "ok": false, "error": "POST only." })
+            }
+            return api_task_actions(req, rest[0:len(rest) - 8])
+        }
+        if rest.ends_with("/schedule") {
+            if method != "PUT" {
+                return http_json(405, { "ok": false, "error": "PUT only." })
+            }
+            return api_task_schedule(req, rest[0:len(rest) - 9])
+        }
+        if method != "GET" {
+            return http_json(405, { "ok": false, "error": "GET only." })
+        }
+        return api_get_task(rest)
+    }
+
+    if method == "POST" and path == "/api/memories" {
+        return api_memory_add(req)
+    }
+
+    if path.starts_with("/api/memories/") {
+        let mem_id = path[14:]
+        if method == "PUT" {
+            return api_memory_update(req, mem_id)
+        }
+        if method == "DELETE" {
+            return api_memory_delete(mem_id)
+        }
+        return http_json(405, { "ok": false, "error": "PUT or DELETE only." })
+    }
+
+    if path.starts_with("/api/schedules/") {
+        if method != "DELETE" {
+            return http_json(405, { "ok": false, "error": "DELETE only." })
+        }
+        return api_delete_schedule(path[15:])
+    }
+
+    if path == "/api/settings" {
+        if method != "PATCH" {
+            return http_json(405, { "ok": false, "error": "PATCH only." })
+        }
+        return api_settings(req)
+    }
+
     if method == "POST" and path == "/api/pages" {
         return api_new_page(req)
     }
@@ -216,6 +423,9 @@ fn route(req) {
     }
 
     let st = state()
+    // A due schedule fires on read: the workspace has no background thread,
+    // and a single person looking at a page is the clock that matters.
+    fire_due(st)
     var parts = []
     var i = 0
     let raw = path.split("/")
@@ -231,6 +441,15 @@ fn route(req) {
     }
     if parts[0] == "about" {
         return http_html(200, view_about(st))
+    }
+    if parts[0] == "tasks" {
+        return http_html(200, view_tasks(st))
+    }
+    if parts[0] == "memories" {
+        return http_html(200, view_memories(st))
+    }
+    if parts[0] == "settings" {
+        return http_html(200, view_settings(st))
     }
     if parts[0] == "spaces" and len(parts) == 1 {
         return http_html(200, view_spaces(st))
@@ -250,12 +469,22 @@ fn route(req) {
         }
         return http_html(200, view_page(st, space, page))
     }
+    if parts[0] == "buns" and len(parts) == 2 {
+        let focus = req["query"]["run"] ?? ""
+        let start_at = int(req["query"]["from"] ?? "0")
+        let html = dot_page(st, parts[1], focus, start_at)
+        if html == null {
+            return http_text(404, "no such bun")
+        }
+        return http_html(200, html)
+    }
+    // The old /dots/ paths keep working; every link this build emits is /buns/.
     if parts[0] == "dots" and len(parts) == 2 {
         let focus = req["query"]["run"] ?? ""
         let start_at = int(req["query"]["from"] ?? "0")
         let html = dot_page(st, parts[1], focus, start_at)
         if html == null {
-            return http_text(404, "no such coworker")
+            return http_text(404, "no such bun")
         }
         return http_html(200, html)
     }

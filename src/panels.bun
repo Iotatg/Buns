@@ -1,0 +1,328 @@
+// src/panels.bun — Tasks, Memories, and Settings.
+//
+// These are the OpenDots views Buns did not have yet. Tasks is the whole
+// ledger of work: waiting, running, scheduled, done, and the activity feed.
+// Memories is what each bun keeps between conversations. Settings is the one
+// page where the workspace admits what it has not connected.
+
+import { esc, clip, ago, until } from "./store.bun"
+import { icon, glyph, pill, shell, bar, status_dot } from "./ui.bun"
+import { dot_by_id, open_gates } from "./agent.bun"
+import { dot_memories } from "./memory.bun"
+
+// ---------------------------------------------------------------- helpers
+
+fn sec_head(title, note) {
+    var out = "<div class=\"sec-head\"><h2 class=\"sec-title\">" + esc(title) + "</h2>"
+    if note != "" {
+        out += "<span class=\"sec-note\">" + esc(note) + "</span>"
+    }
+    out += "</div>"
+    return out
+}
+
+fn count_note(n, word) {
+    if n == 1 {
+        return "1 " + word
+    }
+    return str(n) + " " + word + "s"
+}
+
+fn run_span(run) {
+    var total = 0
+    var i = 0
+    while i < len(run["steps"]) {
+        total += run["steps"][i]["ms"]
+        i += 1
+    }
+    if total >= 1000 {
+        return str(total / 1000) + "." + str((total % 1000) / 100) + "s"
+    }
+    return str(total) + "ms"
+}
+
+fn run_state_text(run) {
+    let done = run["cursor"]
+    let all = len(run["steps"])
+    if run["status"] == "waiting" {
+        return str(done) + " of " + str(all) + " · waiting on you"
+    }
+    if run["status"] == "done" {
+        return str(all) + " steps · " + run_span(run)
+    }
+    return str(done) + " of " + str(all) + " · working"
+}
+
+// ------------------------------------------------------------------ tasks
+
+export fn view_tasks(st) {
+    let gates = open_gates(st)
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Tasks</span>"],
+        "<span class=\"bar-date\">" + str(len(gates)) + " waiting · " + str(len(st["schedules"])) + " scheduled</span>")
+
+    var h = "<div class=\"view view-tasks\">"
+    h += "<h1 class=\"page-h\">Tasks</h1>"
+    h += "<p class=\"page-lede\">Everything the buns are doing, did, or will do on their own. A scheduled task starts itself when its time comes, with the same gates as anything else.</p>"
+
+    // waiting on you
+    h += "<section class=\"block\">" + sec_head("Waiting on you", count_note(len(gates), "decision"))
+    if len(gates) == 0 {
+        h += "<p class=\"quiet\">Nothing is blocked.</p>"
+    } else {
+        h += "<div class=\"gate-list\">"
+        var i = 0
+        while i < len(gates) {
+            h += gate_card_of(st, gates[i])
+            i += 1
+        }
+        h += "</div>"
+    }
+    h += "</section>"
+
+    // in progress
+    var working = []
+    var j = 0
+    while j < len(st["runs"]) {
+        if st["runs"][j]["status"] == "working" {
+            working.push(st["runs"][j])
+        }
+        j += 1
+    }
+    h += "<section class=\"block\">" + sec_head("In progress", count_note(len(working), "task"))
+    if len(working) == 0 {
+        h += "<p class=\"quiet\">No task is executing right now.</p>"
+    } else {
+        h += "<ul class=\"work-list\">"
+        var k = 0
+        while k < len(working) {
+            let r = working[k]
+            let d = dot_by_id(st, r["dot"])
+            h += "<li class=\"work\"><a class=\"work-link\" href=\"/buns/" + d["id"] + "?run=" + r["id"] + "\">"
+            h += glyph(d, 22)
+            h += "<span class=\"work-main\"><span class=\"work-goal\">" + esc(clip(r["goal"], 64)) + "</span>"
+            h += "<span class=\"work-meta\">" + esc(d["name"]) + " · " + ago(r["at"]) + " · " + run_state_text(r) + "</span></span>"
+            h += "</a></li>"
+            k += 1
+        }
+        h += "</ul>"
+    }
+    h += "</section>"
+
+    // scheduled
+    h += "<section class=\"block\">" + sec_head("Scheduled", count_note(len(st["schedules"]), "schedule"))
+    if len(st["schedules"]) == 0 {
+        h += "<p class=\"quiet\">Nothing repeats yet. The form below starts one.</p>"
+    } else {
+        h += "<ul class=\"sch-list\">"
+        var m = 0
+        while m < len(st["schedules"]) {
+            let s = st["schedules"][m]
+            let d = dot_by_id(st, s["dot"])
+            h += "<li class=\"sch\">" + glyph(d, 22)
+            h += "<span class=\"sch-main\"><span class=\"sch-goal\">" + esc(s["goal"]) + "</span>"
+            h += "<span class=\"sch-meta\">" + esc(d["name"]) + " · " + esc(s["cadence"]) + " · next " + until(s["next_at"]) + "</span></span>"
+            h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-sch-del=\"" + s["id"] + "\">Remove</button></li>"
+            m += 1
+        }
+        h += "</ul>"
+    }
+    h += "<form class=\"sched-form\" data-sched-form>"
+    h += "<label class=\"sr\" for=\"sched-dot\">Bun</label>"
+    h += "<select id=\"sched-dot\" name=\"dot\">"
+    var n = 0
+    while n < len(st["dots"]) {
+        h += "<option value=\"" + st["dots"][n]["id"] + "\">" + esc(st["dots"][n]["name"]) + "</option>"
+        n += 1
+    }
+    h += "</select>"
+    h += "<label class=\"sr\" for=\"sched-goal\">Goal</label>"
+    h += "<input type=\"text\" id=\"sched-goal\" name=\"goal\" placeholder=\"What should it do each time?\" required>"
+    h += "<label class=\"sr\" for=\"sched-cadence\">Cadence</label>"
+    h += "<select id=\"sched-cadence\" name=\"cadence\"><option value=\"daily\">Daily</option><option value=\"weekdays\">Weekdays</option><option value=\"weekly\">Weekly</option></select>"
+    h += "<button class=\"btn btn-fill\" type=\"submit\">Schedule</button>"
+    h += "</form>"
+    h += "</section>"
+
+    // recently finished
+    h += "<section class=\"block\">" + sec_head("Recently finished", "")
+    var dones = []
+    var q = len(st["runs"]) - 1
+    while q >= 0 and len(dones) < 6 {
+        if st["runs"][q]["status"] == "done" {
+            dones.push(st["runs"][q])
+        }
+        q -= 1
+    }
+    if len(dones) == 0 {
+        h += "<p class=\"quiet\">Nothing has finished yet.</p>"
+    } else {
+        h += "<ul class=\"work-list\">"
+        var w = 0
+        while w < len(dones) {
+            let r = dones[w]
+            let d = dot_by_id(st, r["dot"])
+            h += "<li class=\"work\"><a class=\"work-link\" href=\"/buns/" + d["id"] + "?run=" + r["id"] + "\">"
+            h += glyph(d, 22)
+            h += "<span class=\"work-main\"><span class=\"work-goal\">" + esc(clip(r["goal"], 64)) + "</span>"
+            h += "<span class=\"work-meta\">" + esc(d["name"]) + " · " + ago(r["at_done"] ?? r["at"]) + " · " + run_state_text(r) + "</span></span>"
+            h += "</a></li>"
+            w += 1
+        }
+        h += "</ul>"
+    }
+    h += "</section>"
+
+    // activity
+    h += "<section class=\"block\">" + sec_head("Activity", "the whole log")
+    h += "<ul class=\"act-list\">"
+    var e = len(st["events"]) - 1
+    var shown = 0
+    while e >= 0 and shown < 12 {
+        let ev = st["events"][e]
+        let d = dot_by_id(st, ev["dot"])
+        h += "<li class=\"act\">" + glyph(d, 20)
+        h += "<span class=\"act-text\"><strong>" + esc(d["name"]) + "</strong> " + esc(ev["text"]) + "</span>"
+        h += "<span class=\"act-when\">" + ago(ev["at"]) + "</span></li>"
+        e -= 1
+        shown += 1
+    }
+    if len(st["events"]) == 0 {
+        h += "<li class=\"quiet\">Nothing has happened yet.</li>"
+    }
+    h += "</ul></section>"
+
+    h += "</div>"
+    return shell("tasks", "Tasks", body + h)
+}
+
+// A local copy of the Today gate card so panels.bun does not import views.bun.
+fn gate_card_of(st, r) {
+    let d = dot_by_id(st, r["dot"])
+    let s = r["steps"][r["cursor"]]
+    var h = "<article class=\"gate-card\" data-run=\"" + r["id"] + "\">"
+    h += "<div class=\"gc-top\">" + glyph(d, 28)
+    h += "<div class=\"gc-id\"><span class=\"gc-dot\">" + esc(d["name"]) + "</span>"
+    h += "<span class=\"gc-time\">" + ago(r["at"]) + "</span></div>"
+    h += pill("Needs approval", "wait") + "</div>"
+    h += "<p class=\"gc-goal\">" + esc(r["goal"]) + "</p>"
+    h += "<div class=\"gc-step\"><span class=\"step-tool\">" + esc(s["tool"]) + "</span>" + esc(s["label"]) + "</div>"
+    h += "<div class=\"gc-acts\">"
+    h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-refuse=\"" + r["id"] + "\">Refuse</button>"
+    h += "<button class=\"btn btn-fill btn-sm\" type=\"button\" data-approve=\"" + r["id"] + "\">Approve</button>"
+    h += "</div></article>"
+    return h
+}
+
+// --------------------------------------------------------------- memories
+
+export fn view_memories(st) {
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Memories</span>"],
+        "<span class=\"bar-date\">" + str(len(st["memories"])) + " kept</span>")
+
+    var h = "<div class=\"view view-memories\">"
+    h += "<h1 class=\"page-h\">Memories</h1>"
+    h += "<p class=\"page-lede\">What each bun keeps between conversations. An automatic memory is one sentence written when a task finishes; a manual one is yours. The next plan recalls up to three of them, and shows that as its first step.</p>"
+
+    h += "<form class=\"mem-add\" data-mem-form>"
+    h += "<label class=\"sr\" for=\"mem-dot\">Bun</label>"
+    h += "<select id=\"mem-dot\" name=\"dot\">"
+    var i = 0
+    while i < len(st["dots"]) {
+        h += "<option value=\"" + st["dots"][i]["id"] + "\">" + esc(st["dots"][i]["name"]) + "</option>"
+        i += 1
+    }
+    h += "</select>"
+    h += "<label class=\"sr\" for=\"mem-text\">Memory</label>"
+    h += "<input type=\"text\" id=\"mem-text\" name=\"text\" placeholder=\"Teach a bun something it should keep.\" required>"
+    h += "<button class=\"btn btn-fill\" type=\"submit\">Keep</button>"
+    h += "</form>"
+
+    var d = 0
+    while d < len(st["dots"]) {
+        let dot = st["dots"][d]
+        let mems = dot_memories(st, dot["id"])
+        h += "<section class=\"block\">" + sec_head(dot["name"], count_note(len(mems), "memory"))
+        if len(mems) == 0 {
+            h += "<p class=\"quiet\">" + esc(dot["name"]) + " keeps nothing yet. Finish a task, or write one above.</p>"
+        } else {
+            h += "<ul class=\"mem-list\">"
+            var m = 0
+            while m < len(mems) {
+                let mem = mems[m]
+                h += "<li class=\"mem-row\" data-mem=\"" + mem["id"] + "\">"
+                h += "<span class=\"mem-text\">" + esc(mem["text"]) + "</span>"
+                if mem["source"] == "manual" {
+                    h += "<span class=\"pill pill-manual\">manual</span>"
+                } else {
+                    h += "<span class=\"pill pill-auto\">auto</span>"
+                }
+                h += "<span class=\"mem-when\">" + ago(mem["at"]) + "</span>"
+                h += "<span class=\"mem-acts\">"
+                h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-mem-edit>Edit</button>"
+                h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-mem-del=\"" + mem["id"] + "\">Delete</button>"
+                h += "</span></li>"
+                m += 1
+            }
+            h += "</ul>"
+        }
+        h += "</section>"
+        d += 1
+    }
+    h += "</div>"
+    return shell("memories", "Memories", body + h)
+}
+
+// ---------------------------------------------------------------- settings
+
+export fn view_settings(st) {
+    let s = st["settings"]
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Settings</span>"], "")
+
+    var h = "<div class=\"view view-settings\">"
+    h += "<h1 class=\"page-h\">Settings</h1>"
+    h += "<p class=\"page-lede\">The workspace, its notifications, and an honest list of what is not connected.</p>"
+
+    h += "<form class=\"settings-form\" data-settings-form>"
+    h += "<section class=\"block\"><div class=\"sec-head\"><h2 class=\"sec-title\">Workspace</h2></div>"
+    h += "<p class=\"set-desc\">The name shows in the rail and in the browser title. The timezone label is what the workspace calls its clock; it does not move the clock.</p>"
+    h += "<label class=\"set-field\"><span>Name</span>"
+    h += "<input type=\"text\" name=\"name\" value=\"" + esc(st["workspace"]["name"]) + "\"></label>"
+    h += "<label class=\"set-field\"><span>Timezone label</span>"
+    h += "<input type=\"text\" name=\"tz_label\" value=\"" + esc(s["tz_label"]) + "\"></label>"
+    h += "</section>"
+
+    h += "<section class=\"block\"><div class=\"sec-head\"><h2 class=\"sec-title\">Notifications</h2></div>"
+    h += "<p class=\"set-desc\">A gate notice is the one interruption worth having: it means a bun is holding at the edge of the workspace. The digest is everything else, once a morning.</p>"
+    h += "<label class=\"set-check\"><input type=\"checkbox\" name=\"notify_gates\"" + checked(s["notify_gates"]) + "><span>Tell me when a task needs approval</span></label>"
+    h += "<label class=\"set-check\"><input type=\"checkbox\" name=\"notify_digest\"" + checked(s["notify_digest"]) + "><span>Send a morning digest of what happened</span></label>"
+    h += "</section>"
+
+    h += "<section class=\"block\"><div class=\"sec-head\"><h2 class=\"sec-title\">Integrations</h2><span class=\"sec-note\">not connected</span></div>"
+    h += "<p class=\"set-desc\">Each row is a service this build could hold a gate in front of. None of them is connected, and the page says so rather than implying otherwise.</p>"
+    h += "<ul class=\"int-list\">"
+    let keys = s["integrations"].keys()
+    var k = 0
+    while k < len(keys) {
+        h += "<li class=\"int\"><code class=\"int-name\">" + esc(keys[k]) + "</code>"
+        h += "<span class=\"int-state\">" + esc(s["integrations"][keys[k]]) + "</span></li>"
+        k += 1
+    }
+    h += "</ul>"
+    h += "<p class=\"quiet\">Connecting a real service is deliberately out of scope. The approval gates exist so that connecting one later does not change the part that has to be right.</p>"
+    h += "</section>"
+
+    h += "<div class=\"settings-foot\">"
+    h += "<button class=\"btn btn-fill\" type=\"submit\">Save changes</button>"
+    h += "<span class=\"set-state\" data-settings-state>Saved</span>"
+    h += "</div>"
+    h += "</form>"
+    h += "</div>"
+    return shell("settings", "Settings", body + h)
+}
+
+fn checked(v) {
+    if v {
+        return " checked"
+    }
+    return ""
+}

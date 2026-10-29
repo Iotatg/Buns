@@ -28,7 +28,8 @@ let ICONS = {
     "screen": "M3 4h18v12H3zM8 20h8M12 16v4",
     "bolt": "M13 3L5 14h6l-1 7 8-11h-6z",
     "clock": "M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2",
-    "shield": "M12 3l8 3v6c0 5-4 8-8 9-4-1-8-4-8-9V6z"
+    "shield": "M12 3l8 3v6c0 5-4 8-8 9-4-1-8-4-8-9V6z",
+    "gear": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"
 }
 
 export fn icon(name, size) {
@@ -271,6 +272,14 @@ fn is_ordered(line) {
 
 // ------------------------------------------------------------------ shell
 
+fn wl_row(href, label, on, ico) {
+    var cls = "wl-row"
+    if on {
+        cls += " is-on"
+    }
+    return "<a class=\"" + cls + "\" href=\"" + href + "\">" + icon(ico, 14) + "<span>" + esc(label) + "</span></a>"
+}
+
 fn rail(active) {
     let st = state()
     var out = "<aside class=\"rail\">"
@@ -280,8 +289,8 @@ fn rail(active) {
     out += "<span class=\"ws-plan\">" + esc(st["workspace"]["plan"]) + " · " + str(st["workspace"]["seats"]) + " seats</span></span>"
     out += "</a>"
 
-    out += "<nav class=\"rail-sec\" aria-label=\"Coworkers\">"
-    out += "<div class=\"rail-head\"><span>Coworkers</span><span class=\"rail-count\">" + str(len(st["dots"])) + "</span></div>"
+    out += "<nav class=\"rail-sec\" aria-label=\"Buns\">"
+    out += "<div class=\"rail-head\"><span>Buns</span><span class=\"rail-count\">" + str(len(st["dots"])) + "</span></div>"
     var i = 0
     while i < len(st["dots"]) {
         let d = st["dots"][i]
@@ -289,13 +298,20 @@ fn rail(active) {
         if active == d["id"] {
             cls += " is-on"
         }
-        out += "<a class=\"" + cls + "\" href=\"/dots/" + d["id"] + "\">"
+        out += "<a class=\"" + cls + "\" href=\"/buns/" + d["id"] + "\">"
         out += glyph(d, 26)
         out += "<span class=\"dot-id\"><span class=\"dot-name\">" + esc(d["name"]) + status_dot(d["status"]) + "</span>"
         out += "<span class=\"dot-sub\">" + esc(clip(d["now"], 30)) + "</span></span>"
         out += "</a>"
         i += 1
     }
+    out += "</nav>"
+
+    out += "<nav class=\"rail-sec\" aria-label=\"Workspace\">"
+    out += "<div class=\"rail-head\"><span>Workspace</span></div>"
+    out += wl_row("/tasks", "Tasks", active == "tasks", "check")
+    out += wl_row("/memories", "Memories", active == "memories", "doc")
+    out += wl_row("/settings", "Settings", active == "settings", "gear")
     out += "</nav>"
 
     out += "<nav class=\"rail-sec\" aria-label=\"Spaces\">"

@@ -1,0 +1,123 @@
+// src/memory.bun — what each Bun keeps between conversations.
+//
+// A memory is one sentence tied to one bun. Automatic memories are written
+// when a task finishes; manual ones are written by the human. Recall scores
+// memories by word overlap with the request, and the top three are shown as
+// the first step of the next run, so the use of memory is visible and
+// auditable rather than magical.
+
+import { new_id } from "./store.bun"
+
+export fn memory_by_id(st, id) {
+    var i = 0
+    while i < len(st["memories"]) {
+        if st["memories"][i]["id"] == id {
+            return st["memories"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn dot_memories(st, dot_id) {
+    var out = []
+    var i = 0
+    while i < len(st["memories"]) {
+        if st["memories"][i]["dot"] == dot_id {
+            out.push(st["memories"][i])
+        }
+        i += 1
+    }
+    // newest first
+    var sorted_m = []
+    while len(out) > 0 {
+        var best = 0
+        var k = 1
+        while k < len(out) {
+            if out[k]["at"] > out[best]["at"] {
+                best = k
+            }
+            k += 1
+        }
+        sorted_m.push(out[best])
+        out.splice(best, 1)
+    }
+    return sorted_m
+}
+
+export fn add_memory(st, dot_id, text, source) {
+    let clean = str(text).trim()
+    if len(clean) == 0 {
+        return null
+    }
+    let m = { "id": new_id("mem"), "dot": dot_id, "text": clean, "source": source, "at": now() }
+    st["memories"].push(m)
+    return m
+}
+
+export fn update_memory(st, id, text) {
+    let m = memory_by_id(st, id)
+    if m == null {
+        return null
+    }
+    let clean = str(text).trim()
+    if len(clean) == 0 {
+        return m
+    }
+    m["text"] = clean
+    m["at"] = now()
+    return m
+}
+
+export fn delete_memory(st, id) {
+    var i = 0
+    while i < len(st["memories"]) {
+        if st["memories"][i]["id"] == id {
+            st["memories"].splice(i, 1)
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+// Words shorter than four letters carry no meaning on their own, so they do
+// not score. A memory that shares no word with the request is not recalled.
+export fn recall(st, dot_id, goal) {
+    let words = str(goal).lower().split(" ")
+    let mems = dot_memories(st, dot_id)
+    var pool = []
+    var i = 0
+    while i < len(mems) {
+        let text = mems[i]["text"].lower()
+        var score = 0
+        var j = 0
+        while j < len(words) {
+            let w = words[j]
+            if len(w) > 3 and text.contains(w) {
+                score += 1
+            }
+            j += 1
+        }
+        if score > 0 {
+            pool.push({ "m": mems[i], "score": score })
+        }
+        i += 1
+    }
+    var out = []
+    var guard = 0
+    while len(pool) > 0 and guard < 3 {
+        var best = 0
+        var k = 1
+        while k < len(pool) {
+            if pool[k]["score"] > pool[best]["score"] {
+                best = k
+            }
+            k += 1
+        }
+        out.push(pool[best]["m"]["text"])
+        pool.splice(best, 1)
+        guard += 1
+    }
+    return out
+}

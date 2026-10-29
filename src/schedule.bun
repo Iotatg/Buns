@@ -1,0 +1,93 @@
+// src/schedule.bun — tasks that start themselves.
+//
+// A schedule is a bun, a goal, and a cadence. When a page is loaded the
+// server checks every schedule against the clock; a due one starts a real
+// task (with gates and approvals like any other) and moves its own next run
+// forward. There is no background thread: the check runs on read, which is
+// honest for a single-person workspace.
+
+import { commit, new_id, clip, weekday } from "./store.bun"
+import { start } from "./agent.bun"
+
+export fn schedule_by_id(st, id) {
+    var i = 0
+    while i < len(st["schedules"]) {
+        if st["schedules"][i]["id"] == id {
+            return st["schedules"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn interval_for(cadence) {
+    let c = str(cadence).lower()
+    if c == "weekly" {
+        return 86400 * 7
+    }
+    return 86400
+}
+
+// The next fire is one cadence later, and a weekday schedule never lands on
+// a weekend — it slides to Monday morning instead.
+export fn next_after(ts, cadence) {
+    var next = ts + interval_for(cadence)
+    if str(cadence).lower() == "weekdays" {
+        var w = weekday(next)
+        while w == "Sat" or w == "Sun" {
+            next += 86400
+            w = weekday(next)
+        }
+    }
+    return next
+}
+
+export fn add_schedule(st, dot_id, goal, cadence, first_at) {
+    var c = str(cadence).lower()
+    if c != "daily" and c != "weekdays" and c != "weekly" {
+        c = "daily"
+    }
+    let s = {
+        "id": new_id("sch"),
+        "dot": dot_id,
+        "goal": str(goal).trim(),
+        "cadence": c,
+        "next_at": int(first_at)
+    }
+    st["schedules"].push(s)
+    st["events"].push({ "at": now(), "dot": dot_id, "text": "Scheduled · " + clip(s["goal"], 56) + " · " + c })
+    commit()
+    return s
+}
+
+export fn delete_schedule(st, id) {
+    var i = 0
+    while i < len(st["schedules"]) {
+        if st["schedules"][i]["id"] == id {
+            st["schedules"].splice(i, 1)
+            commit()
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+// Returns how many schedules fired. start() commits on its own, so a crash
+// between the task and the bookkeeping loses at most one repeat.
+export fn fire_due(st) {
+    var fired = 0
+    var i = 0
+    while i < len(st["schedules"]) {
+        let s = st["schedules"][i]
+        if now() >= s["next_at"] {
+            let run = start(st, s["dot"], "", s["goal"])
+            s["last_task"] = run["id"]
+            s["next_at"] = next_after(s["next_at"], s["cadence"])
+            st["events"].push({ "at": now(), "dot": s["dot"], "text": "Fired on schedule · " + clip(s["goal"], 56) })
+            fired += 1
+        }
+        i += 1
+    }
+    return fired
+}

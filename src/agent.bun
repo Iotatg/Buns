@@ -8,6 +8,7 @@
 // replace it with a completion and the rest of the system does not change.
 
 import { state, commit, new_id, clip, slug } from "./store.bun"
+import { recall, add_memory } from "./memory.bun"
 
 // ------------------------------------------------------------------ lookup
 
@@ -53,6 +54,12 @@ export fn run_by_id(st, id) {
         i += 1
     }
     return null
+}
+
+// OpenDots calls them tasks; the store calls them runs. One alias keeps both
+// vocabularies honest.
+export fn task_by_id(st, id) {
+    return run_by_id(st, id)
 }
 
 export fn thread_by_id(st, id) {
@@ -495,15 +502,35 @@ export fn advance(st, run) {
     }
     run["status"] = "done"
     run["at_done"] = now()
+    st["events"].push({ "at": now(), "dot": run["dot"], "text": "Finished · " + clip(run["goal"], 56) })
     if dot != null {
         dot["status"] = "idle"
         dot["now"] = "Last: " + clip(run["goal"], 34)
+        // A finished task leaves one sentence behind. That sentence is the
+        // bun's memory, and the next plan will recall it.
+        let last = run["steps"][len(run["steps"]) - 1]
+        add_memory(st, run["dot"], "Did “" + clip(run["goal"], 70) + "”. " + clip(last["detail"], 70), "auto")
     }
     return run
 }
 
 export fn start(st, dot_id, thread_id, goal) {
     let dot = dot_by_id(st, dot_id)
+    // Recall comes first, as its own step: what the bun remembered and used
+    // is on the record, not hidden inside the plan.
+    var steps = []
+    let mems = recall(st, dot_id, goal)
+    if len(mems) > 0 {
+        var r = step("memory.recall", "Recalled " + str(len(mems)) + " memories before planning", 0, 400, "matched this request")
+        r["screen"] = { "kind": "doc", "title": "Memory recall", "url": "buns://memory/" + dot_id, "lines": mems }
+        steps.push(r)
+    }
+    let planned = plan(st, dot, goal)
+    var pi = 0
+    while pi < len(planned) {
+        steps.push(planned[pi])
+        pi += 1
+    }
     var run = {
         "id": "r_" + str(len(st["runs"]) + 1) + "_" + str(int(now()) % 10000),
         "dot": dot_id,
@@ -512,11 +539,12 @@ export fn start(st, dot_id, thread_id, goal) {
         "at": now(),
         "cursor": 0,
         "status": "working",
-        "steps": plan(st, dot, goal)
+        "steps": steps
     }
     st["runs"].push(run)
     dot["status"] = "working"
     dot["now"] = goal
+    st["events"].push({ "at": now(), "dot": dot_id, "text": "Started · " + clip(goal, 56) })
     advance(st, run)
     commit()
     return run
@@ -537,12 +565,13 @@ export fn decide(st, run_id, approve) {
     if approve {
         s["state"] = "approved"
         s["decided_at"] = now()
+        st["events"].push({ "at": now(), "dot": run["dot"], "text": "Approved · " + clip(s["label"], 56) })
     } else {
         s["state"] = "skipped"
         s["decided_at"] = now()
         run["cursor"] += 1
         run["refused"] = true
-        st["events"].push({ "at": now(), "dot": run["dot"], "text": "Refused: " + s["label"] })
+        st["events"].push({ "at": now(), "dot": run["dot"], "text": "Refused · " + clip(s["label"], 56) })
         commit()
         return advance(st, run)
     }

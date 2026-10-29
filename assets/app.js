@@ -52,7 +52,7 @@
           text
         });
         if (!ok) throw new Error(data.error || 'The run did not start.');
-        location.href = `/dots/${composer.dataset.dot}?run=${encodeURIComponent(data.run)}&from=0`;
+        location.href = `/buns/${composer.dataset.dot}?run=${encodeURIComponent(data.run)}&from=0`;
       } catch (error) {
         button.disabled = false;
         button.innerHTML = label;
@@ -88,7 +88,7 @@
         const { ok, data } = await post(`/api/runs/${runId}/decide`, { approve });
         if (!ok) throw new Error(data.error || 'That decision was not accepted.');
         if (dot) {
-          location.href = `/dots/${dot.dataset.dot}?run=${encodeURIComponent(runId)}&from=${index < 0 ? 0 : index}`;
+          location.href = `/buns/${dot.dataset.dot}?run=${encodeURIComponent(runId)}&from=${index < 0 ? 0 : index}`;
         } else {
           location.reload();
         }
@@ -308,5 +308,149 @@
         });
       }
     }
+  }
+
+  /* ----------------------------------------------------------- command bar */
+
+  const palette = document.createElement('div');
+  palette.className = 'cmdk';
+  palette.hidden = true;
+  palette.innerHTML = '<div class="cmdk-card" role="dialog" aria-label="Command bar">'
+    + '<input type="search" placeholder="Type a place…" aria-label="Command">'
+    + '<ul class="cmdk-list"></ul></div>';
+  document.body.appendChild(palette);
+  const cmdInput = $('input', palette);
+  const cmdList = $('.cmdk-list', palette);
+  const seen = {};
+  const cmds = $$('.rail a')
+    .map((a) => ({ label: a.textContent.trim().replace(/\s+/g, ' '), href: a.getAttribute('href') }))
+    .filter((c) => (seen[c.href] ? false : (seen[c.href] = true)));
+  const renderCmds = () => {
+    const q = cmdInput.value.trim().toLowerCase();
+    const hits = cmds.filter((c) => !q || c.label.toLowerCase().includes(q)).slice(0, 9);
+    cmdList.innerHTML = hits.map((c, i) =>
+      `<li${i === 0 ? ' class="is-sel"' : ''}><a href="${c.href}">${c.label}</a></li>`).join('')
+      || '<li class="cmdk-none">Nothing matches.</li>';
+  };
+  const openPalette = () => { palette.hidden = false; cmdInput.value = ''; renderCmds(); cmdInput.focus(); };
+  const closePalette = () => { palette.hidden = true; };
+  document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      if (palette.hidden) openPalette(); else closePalette();
+    } else if (event.key === 'Escape' && !palette.hidden) {
+      closePalette();
+    }
+  });
+  palette.addEventListener('click', (event) => { if (event.target === palette) closePalette(); });
+  cmdInput.addEventListener('input', renderCmds);
+  cmdInput.addEventListener('keydown', (event) => {
+    const rows = $$('li', cmdList).filter((r) => $('a', r));
+    let idx = rows.findIndex((r) => r.classList.contains('is-sel'));
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (idx >= 0) rows[idx].classList.remove('is-sel');
+      idx = event.key === 'ArrowDown' ? Math.min(idx + 1, rows.length - 1) : Math.max(idx - 1, 0);
+      if (rows[idx]) rows[idx].classList.add('is-sel');
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const row = rows[Math.max(idx, 0)];
+      const link = row && $('a', row);
+      if (link) location.href = link.getAttribute('href');
+    }
+  });
+
+  /* -------------------------------------------------------------- memories */
+
+  const put = async (url, body, method = 'PUT') => {
+    const res = await fetch(url, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    return { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
+  };
+
+  const memForm = $('[data-mem-form]');
+  if (memForm) {
+    memForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const dot = $('select', memForm).value;
+      const text = $('input[type="text"]', memForm).value.trim();
+      if (!text) return;
+      const { ok } = await post('/api/memories', { dot, text });
+      if (ok) location.reload();
+    });
+    $$('[data-mem-del]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const res = await fetch('/api/memories/' + button.dataset.memDel, { method: 'DELETE' });
+        if (res.ok) location.reload(); else button.disabled = false;
+      });
+    });
+    $$('[data-mem-edit]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const row = button.closest('[data-mem]');
+        const span = $('.mem-text', row);
+        const open = $('textarea', row);
+        if (open) {
+          put('/api/memories/' + row.dataset.mem, { text: open.value }).then(({ ok }) => {
+            if (ok) location.reload(); else open.focus();
+          });
+          return;
+        }
+        const ta = document.createElement('textarea');
+        ta.className = 'mem-input';
+        ta.value = span.textContent;
+        span.hidden = true;
+        row.insertBefore(ta, span);
+        ta.focus();
+        button.textContent = 'Save';
+      });
+    });
+  }
+
+  /* -------------------------------------------------------------- settings */
+
+  const settingsForm = $('[data-settings-form]');
+  if (settingsForm) {
+    const stateEl = $('[data-settings-state]');
+    settingsForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const data = {
+        name: $('input[name="name"]', settingsForm).value,
+        tz_label: $('input[name="tz_label"]', settingsForm).value,
+        notify_gates: $('input[name="notify_gates"]').checked,
+        notify_digest: $('input[name="notify_digest"]').checked
+      };
+      const { ok } = await put('/api/settings', data, 'PATCH');
+      if (stateEl) {
+        stateEl.textContent = ok ? 'Saved' : 'Not saved';
+        stateEl.style.color = ok ? '' : 'var(--accent)';
+        setTimeout(() => { stateEl.textContent = 'Saved'; stateEl.style.color = ''; }, 2400);
+      }
+    });
+  }
+
+  /* -------------------------------------------------------------- schedule */
+
+  const schedForm = $('[data-sched-form]');
+  if (schedForm) {
+    schedForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const dot = $('select[name="dot"]', schedForm).value;
+      const goal = $('input[name="goal"]', schedForm).value.trim();
+      const cadence = $('select[name="cadence"]', schedForm).value;
+      if (!goal) return;
+      const { ok } = await post('/api/tasks', { dot, goal, schedule: { cadence } });
+      if (ok) location.reload();
+    });
+    $$('[data-sch-del]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const res = await fetch('/api/schedules/' + button.dataset.schDel, { method: 'DELETE' });
+        if (res.ok) location.reload(); else button.disabled = false;
+      });
+    });
   }
 })();

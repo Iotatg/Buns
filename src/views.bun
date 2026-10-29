@@ -84,6 +84,24 @@ fn gate_text(s) {
     return "This step changes something outside the workspace."
 }
 
+// One open decision, rendered. Used by Today and by Tasks.
+export fn gate_card(st, r) {
+    let d = dot_by_id(st, r["dot"])
+    let s = r["steps"][r["cursor"]]
+    var h = "<article class=\"gate-card\" data-run=\"" + r["id"] + "\">"
+    h += "<div class=\"gc-top\">" + glyph(d, 28)
+    h += "<div class=\"gc-id\"><span class=\"gc-dot\">" + esc(d["name"]) + "</span>"
+    h += "<span class=\"gc-time\">" + ago(r["at"]) + "</span></div>"
+    h += pill("Needs approval", "wait") + "</div>"
+    h += "<p class=\"gc-goal\">" + esc(r["goal"]) + "</p>"
+    h += "<div class=\"gc-step\"><span class=\"step-tool\">" + esc(s["tool"]) + "</span>" + esc(s["label"]) + "</div>"
+    h += "<div class=\"gc-acts\">"
+    h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-refuse=\"" + r["id"] + "\">Refuse</button>"
+    h += "<button class=\"btn btn-fill btn-sm\" type=\"button\" data-approve=\"" + r["id"] + "\">Approve</button>"
+    h += "</div></article>"
+    return h
+}
+
 // ------------------------------------------------------------------- run
 
 export fn run_card(st, run, play, start_at) {
@@ -154,7 +172,7 @@ export fn run_card(st, run, play, start_at) {
 export fn view_today(st) {
     var body = bar(["<span class=\"crumb-now\">Today</span>"],
         "<span class=\"bar-date\">" + weekday(now()) + " " + stamp(now()) + " · " + clock(now()) + "</span>"
-        + "<a class=\"btn btn-fill\" href=\"/dots/scout\">" + icon("plus", 13) + " Ask a coworker</a>")
+        + "<a class=\"btn btn-fill\" href=\"/dots/scout\">" + icon("plus", 13) + " Ask a bun</a>")
 
     let gates = open_gates(st)
     var h = "<div class=\"view view-today\">"
@@ -171,20 +189,7 @@ export fn view_today(st) {
         h += "<div class=\"gate-list\">"
         var i = 0
         while i < len(gates) {
-            let r = gates[i]
-            let d = dot_by_id(st, r["dot"])
-            let s = r["steps"][r["cursor"]]
-            h += "<article class=\"gate-card\" data-run=\"" + r["id"] + "\">"
-            h += "<div class=\"gc-top\">" + glyph(d, 28)
-            h += "<div class=\"gc-id\"><span class=\"gc-dot\">" + esc(d["name"]) + "</span>"
-            h += "<span class=\"gc-time\">" + ago(r["at"]) + "</span></div>"
-            h += pill("Needs approval", "wait") + "</div>"
-            h += "<p class=\"gc-goal\">" + esc(r["goal"]) + "</p>"
-            h += "<div class=\"gc-step\"><span class=\"step-tool\">" + esc(s["tool"]) + "</span>" + esc(s["label"]) + "</div>"
-            h += "<div class=\"gc-acts\">"
-            h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-refuse=\"" + r["id"] + "\">Refuse</button>"
-            h += "<button class=\"btn btn-fill btn-sm\" type=\"button\" data-approve=\"" + r["id"] + "\">Approve</button>"
-            h += "</div></article>"
+            h += gate_card(st, gates[i])
             i += 1
         }
         h += "</div>"
@@ -265,9 +270,9 @@ fn today_headline(st, gates) {
 
 fn today_lede(st, gates) {
     if len(gates) == 0 {
-        return "Five coworkers, three spaces. Everything they did today is in the log."
+        return "Five buns, three spaces. Everything they did today is in the log."
     }
-    return "Each one is a step a coworker stopped before taking, because it leaves the workspace."
+    return "Each one is a step a bun stopped before taking, because it leaves the workspace."
 }
 
 // -------------------------------------------------------------------- dot
@@ -516,7 +521,7 @@ export fn view_spaces(st) {
 
     var h = "<div class=\"view view-spaces\">"
     h += "<h1 class=\"page-h\">Three spaces,<br>one workspace.</h1>"
-    h += "<p class=\"page-lede\">A space is a home for working documents. Coworkers can be given access to one or several, and every page says who wrote it.</p>"
+    h += "<p class=\"page-lede\">A space is a home for working documents. Buns can be given access to one or several, and every page says who wrote it.</p>"
 
     h += "<div class=\"space-grid\" data-space-grid>"
     var i = 0
@@ -855,7 +860,7 @@ export fn view_about(st) {
     var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">How Buns works</span>"], "")
     var h = "<div class=\"view view-about\">"
     h += "<h1 class=\"page-h\">What is real,<br>and what is not.</h1>"
-    h += "<p class=\"page-lede\">Buns is a workspace where the coworkers have their own computer and stop before they do anything that leaves the building. This page is the honest description of the machinery.</p>"
+    h += "<p class=\"page-lede\">Buns is a workspace where the buns have their own computer and stop before they do anything that leaves the building. This page is the honest description of the machinery.</p>"
 
     h += "<div class=\"about-grid\">"
     h += "<section class=\"ab-block\"><h2>The plan is a rule engine</h2>"

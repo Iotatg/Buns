@@ -690,8 +690,89 @@ export fn seed() {
         }
     ]
 
+    // ----------------------------------------------------------- memories
+    st["memories"] = [
+        {
+            "id": "mem1",
+            "dot": "ledger",
+            "text": "Entity C splits freight by weight; the one-rule-per-entity decision is still open.",
+            "source": "auto",
+            "at": t - 3600 * 20
+        },
+        {
+            "id": "mem2",
+            "dot": "scout",
+            "text": "Buyers object to integration time, not price. Lead with the first week, never with the platform.",
+            "source": "auto",
+            "at": t - 3600 * 2
+        },
+        {
+            "id": "mem3",
+            "dot": "post",
+            "text": "Never send a pricing reply without the per-entity line item.",
+            "source": "manual",
+            "at": t - 86400 * 3
+        },
+        {
+            "id": "mem4",
+            "dot": "forge",
+            "text": "The loader now refuses files without a completion marker.",
+            "source": "auto",
+            "at": t - 86400 * 2
+        },
+        {
+            "id": "mem5",
+            "dot": "relay",
+            "text": "Marcus takes calls Thursday after 15:00 or any time Friday morning.",
+            "source": "auto",
+            "at": t - 3600 * 9
+        },
+        {
+            "id": "mem6",
+            "dot": "post",
+            "text": "Priya's freight-splitting answer is owed after the entity-C decision lands.",
+            "source": "auto",
+            "at": t - 3600 * 27
+        }
+    ]
+
+    // --------------------------------------------------------- schedules
+    st["schedules"] = [
+        {
+            "id": "sch1",
+            "dot": "ledger",
+            "goal": "Review the pipeline sheet and flag every row that moved.",
+            "cadence": "weekdays",
+            "next_at": t + 3600 * 20
+        },
+        {
+            "id": "sch2",
+            "dot": "post",
+            "goal": "Triage the inbox and draft replies to anything unread.",
+            "cadence": "daily",
+            "next_at": t + 3600 * 14
+        }
+    ]
+
+    // ---------------------------------------------------------- settings
+    st["settings"] = {
+        "tz_label": "IST",
+        "compact": false,
+        "notify_gates": true,
+        "notify_digest": false,
+        "integrations": {
+            "slack": "Not connected",
+            "gmail": "Not connected",
+            "mcp": "Not connected"
+        }
+    }
+
     st["outbox"] = []
-    st["events"] = []
+    st["events"] = [
+        { "at": t - 3600 * 2, "dot": "scout", "text": "Finished · Brief me on the mid-market buyer before Thursday." },
+        { "at": t - 3600 * 5, "dot": "post", "text": "Started · Draft replies to the three pricing questions." },
+        { "at": t - 86400 * 2, "dot": "forge", "text": "Finished · Fix the export to fail closed on a partial write." }
+    ]
     st["seq"] = 100
     return st
 }
