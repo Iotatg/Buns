@@ -1,0 +1,23 @@
+import { reset, state } from "../src/store.bun"
+import { seed } from "../src/seed.bun"
+import { start, decide, open_gates, dot_by_id } from "../src/agent.bun"
+
+reset(seed())
+let st = state()
+print("dots " + str(len(st["dots"])) + " pages " + str(len(st["pages"])) + " runs " + str(len(st["runs"])))
+
+let run = start(st, "scout", "", "Brief me on pricing pressure in distribution")
+print("status=" + run["status"] + " cursor=" + str(run["cursor"]) + " steps=" + str(len(run["steps"])))
+var i = 0
+while i < len(run["steps"]) {
+    print("  " + run["steps"][i]["tool"] + " | " + run["steps"][i]["state"] + " | " + run["steps"][i]["label"])
+    i += 1
+}
+print("pages after " + str(len(st["pages"])))
+print("gates " + str(len(open_gates(st))))
+
+let run2 = start(st, "post", "", "Reply to the inbox")
+print("post status=" + run2["status"] + " cursor=" + str(run2["cursor"]))
+let after = decide(st, run2["id"], true)
+print("after approve status=" + after["status"] + " cursor=" + str(after["cursor"]))
+print("outbox " + str(len(st["outbox"])))

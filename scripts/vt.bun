@@ -1,0 +1,4 @@
+import { state } from "../src/store.bun"
+import { view_today } from "../src/views.bun"
+let html = view_today(state())
+print("ok " + str(len(html)))

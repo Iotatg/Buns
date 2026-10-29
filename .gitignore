@@ -1,0 +1,15 @@
+# Runtime workspace state
+data/state.json
+data/*.tmp
+
+# Local Bun-language checkout
+vendor/
+
+# Logs and local launch helpers
+*.log
+*.pid
+.DS_Store
+
+# Editor and test scratch
+*.swp
+__pycache__/

@@ -1,0 +1,344 @@
+// app.bun — the router.
+//
+// Six pages, six endpoints, one file of routing. The server underneath is
+// src/http.bun: raw sockets, keep-alive, chunked responses, no framework.
+
+import { http_listen, http_serve_forever, http_html, http_json, http_text } from "./src/http.bun"
+import { state, commit, reset, esc, new_id } from "./src/store.bun"
+import { seed } from "./src/seed.bun"
+import { dot_by_id, page_by_id, space_by_id, run_by_id, decide, send_message } from "./src/agent.bun"
+import { view_today, view_dot, view_spaces, view_space, view_page, view_search, view_about } from "./src/views.bun"
+
+let PORT = int(getenv_or("PORT", "8801"))
+
+// --------------------------------------------------------------- bootstrap
+
+fn boot() {
+    var st = state()
+    if len(st.keys()) == 0 {
+        reset(seed())
+    }
+}
+
+// ------------------------------------------------------------------ assets
+
+let TYPES = {
+    "css": "text/css; charset=utf-8",
+    "js": "text/javascript; charset=utf-8",
+    "svg": "image/svg+xml",
+    "png": "image/png",
+    "woff2": "font/woff2",
+    "ico": "image/x-icon",
+    "json": "application/json; charset=utf-8"
+}
+
+fn asset(name) {
+    let path = "assets/" + name
+    if not file_exists(path) {
+        return http_text(404, "not found")
+    }
+    let parts = name.split(".")
+    let ext = parts[len(parts) - 1]
+    var kind = TYPES[ext]
+    if kind == null {
+        kind = "application/octet-stream"
+    }
+    let body = read_file(path)
+    return {
+        "status": 200,
+        "headers": { "content-type": kind, "cache-control": "public, max-age=60" },
+        "body": body
+    }
+}
+
+// ------------------------------------------------------------------ pages
+
+fn ensure_thread(st, dot_id) {
+    var latest = null
+    var i = 0
+    while i < len(st["threads"]) {
+        let t = st["threads"][i]
+        if t["dot"] == dot_id {
+            if latest == null or t["at"] > latest["at"] {
+                latest = t
+            }
+        }
+        i += 1
+    }
+    if latest == null {
+        latest = { "id": new_id("t"), "dot": dot_id, "title": "New thread", "at": now(), "messages": [] }
+        st["threads"].push(latest)
+        commit()
+    }
+    return latest
+}
+
+fn dot_page(st, id, focus, start_at) {
+    let dot = dot_by_id(st, id)
+    if dot == null {
+        return null
+    }
+    let thread = ensure_thread(st, id)
+    return view_dot(st, dot, thread, focus, start_at)
+}
+
+// -------------------------------------------------------------------- api
+
+fn read_json(req) {
+    if len(req["body"]) == 0 {
+        return {}
+    }
+    try {
+        return json_parse(req["body"])
+    } catch err {
+        return {}
+    }
+}
+
+fn api_message(req) {
+    let st = state()
+    let body = read_json(req)
+    let dot_id = body["dot"] ?? ""
+    let text = body["text"] ?? ""
+    if dot_id == "" or len(str(text).trim()) == 0 {
+        return http_json(400, { "ok": false, "error": "A message needs a coworker and a sentence." })
+    }
+    let dot = dot_by_id(st, dot_id)
+    if dot == null {
+        return http_json(404, { "ok": false, "error": "No such coworker." })
+    }
+    let thread_id = body["thread"] ?? ""
+    let out = send_message(st, dot_id, thread_id, str(text).trim())
+    return http_json(200, { "ok": true, "thread": out["thread"]["id"], "run": out["run"]["id"], "status": out["run"]["status"] })
+}
+
+fn api_decide(req, run_id) {
+    let st = state()
+    let body = read_json(req)
+    let approve = body["approve"] ?? false
+    let run = run_by_id(st, run_id)
+    if run == null {
+        return http_json(404, { "ok": false, "error": "No such run." })
+    }
+    if run["status"] != "waiting" {
+        return http_json(409, { "ok": false, "error": "This run is not waiting for a decision." })
+    }
+    let out = decide(st, run_id, approve)
+    return http_json(200, { "ok": true, "status": out["status"], "cursor": out["cursor"], "run": out })
+}
+
+fn api_patch_page(req, page_id) {
+    let st = state()
+    let page = page_by_id(st, page_id)
+    if page == null {
+        return http_json(404, { "ok": false, "error": "No such page." })
+    }
+    let body = read_json(req)
+    let rev = body["rev"] ?? -1
+    if rev != page["rev"] {
+        return http_json(409, { "ok": false, "error": "conflict", "rev": page["rev"] })
+    }
+    if body["body"] != null {
+        page["body"] = body["body"]
+    }
+    if body["title"] != null and len(str(body["title"]).trim()) > 0 {
+        page["title"] = str(body["title"]).trim()
+    }
+    page["rev"] += 1
+    page["at"] = now()
+    page["edited"] = "you"
+    commit()
+    return http_json(200, { "ok": true, "rev": page["rev"] })
+}
+
+fn api_new_page(req) {
+    let st = state()
+    let body = read_json(req)
+    let space_id = body["space"] ?? ""
+    if space_by_id(st, space_id) == null {
+        return http_json(400, { "ok": false, "error": "A page needs a space." })
+    }
+    var page = {
+        "id": "p_" + str(len(st["pages"]) + 1) + "_" + str(now() % 10000),
+        "space": space_id,
+        "parent": body["parent"],
+        "title": body["title"] ?? "Untitled page",
+        "by": "scout",
+        "rev": 1,
+        "at": now(),
+        "body": "## Start here\n\nWrite the first line, or ask a coworker to."
+    }
+    st["pages"].push(page)
+    commit()
+    return http_json(200, { "ok": true, "id": page["id"], "space": space_id })
+}
+
+// ------------------------------------------------------------------ router
+
+fn route(req) {
+    let path = req["path"]
+    let method = req["method"]
+
+    if method == "GET" and path == "/health" {
+        return http_json(200, { "ok": true, "service": "buns" })
+    }
+
+    if method == "POST" and path == "/api/messages" {
+        return api_message(req)
+    }
+
+    if method == "POST" and path == "/api/pages" {
+        return api_new_page(req)
+    }
+
+    if path.starts_with("/api/runs/") and path.ends_with("/decide") {
+        if method != "POST" {
+            return http_json(405, { "ok": false, "error": "POST only." })
+        }
+        let id = path[10:len(path) - 7]
+        return api_decide(req, id)
+    }
+
+    if path.starts_with("/api/pages/") {
+        if method != "PATCH" and method != "POST" {
+            return http_json(405, { "ok": false, "error": "PATCH only." })
+        }
+        let id = path[11:]
+        return api_patch_page(req, id)
+    }
+
+    if path.starts_with("/assets/") {
+        return asset(path[8:])
+    }
+
+    if method != "GET" {
+        return http_text(405, "method not allowed")
+    }
+
+    let st = state()
+    var parts = []
+    var i = 0
+    let raw = path.split("/")
+    while i < len(raw) {
+        if len(raw[i]) > 0 {
+            parts.push(raw[i])
+        }
+        i += 1
+    }
+
+    if len(parts) == 0 {
+        return http_html(200, view_today(st))
+    }
+    if parts[0] == "about" {
+        return http_html(200, view_about(st))
+    }
+    if parts[0] == "spaces" and len(parts) == 1 {
+        return http_html(200, view_spaces(st))
+    }
+    if parts[0] == "spaces" and len(parts) == 2 {
+        let space = space_by_id(st, parts[1])
+        if space == null {
+            return http_text(404, "no such space")
+        }
+        return http_html(200, view_space(st, space))
+    }
+    if parts[0] == "spaces" and len(parts) == 4 and parts[2] == "p" {
+        let space = space_by_id(st, parts[1])
+        let page = page_by_id(st, parts[3])
+        if space == null or page == null {
+            return http_text(404, "no such page")
+        }
+        return http_html(200, view_page(st, space, page))
+    }
+    if parts[0] == "dots" and len(parts) == 2 {
+        let focus = req["query"]["run"] ?? ""
+        let start_at = int(req["query"]["from"] ?? "0")
+        let html = dot_page(st, parts[1], focus, start_at)
+        if html == null {
+            return http_text(404, "no such coworker")
+        }
+        return http_html(200, html)
+    }
+    if parts[0] == "search" {
+        let q = req["query"]["q"] ?? ""
+        return http_html(200, view_search(st, url_decode(q)))
+    }
+    return http_text(404, "not found")
+}
+
+// ------------------------------------------------------------------ decode
+
+fn url_decode(text) {
+    var out = ""
+    var i = 0
+    let t = str(text)
+    while i < len(t) {
+        let ch = t[i]
+        if ch == "+" {
+            out += " "
+        } else if ch == "%" and i + 2 < len(t) {
+            let hex = t[i + 1:i + 3]
+            out += str(char_from_hex(hex))
+            i += 2
+        } else {
+            out += ch
+        }
+        i += 1
+    }
+    return out
+}
+
+fn char_from_hex(hex) {
+    let digits = "0123456789abcdef"
+    var value = 0
+    var i = 0
+    let h = str(hex).lower()
+    while i < len(h) {
+        let idx = digits.index_of(h[i])
+        if idx < 0 {
+            return ""
+        }
+        value = value * 16 + idx
+        i += 1
+    }
+    if value < 128 {
+        return str_from_byte(value)
+    }
+    return ""
+}
+
+fn str_from_byte(code) {
+    return utf8_string([code])
+}
+
+// -------------------------------------------------------------------- main
+
+fn handler(req) {
+    try {
+        let res = route(req)
+        res["headers"] = merge_headers(res)
+        return res
+    } catch err {
+        print("[buns] " + str(err))
+        return http_text(500, "the server could not answer that")
+    }
+}
+
+fn merge_headers(res) {
+    var headers = { "x-content-type-options": "nosniff", "referrer-policy": "same-origin" }
+    let given = res["headers"]
+    if given != null {
+        var keys = given.keys()
+        var i = 0
+        while i < len(keys) {
+            headers[keys[i]] = given[keys[i]]
+            i += 1
+        }
+    }
+    return headers
+}
+
+boot()
+print("[buns] listening on http://localhost:" + str(PORT))
+let server = http_listen("0.0.0.0", PORT)
+http_serve_forever(server, handler)

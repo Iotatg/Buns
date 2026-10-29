@@ -1,0 +1,210 @@
+// src/store.bun — one JSON document, held in memory, written through on change.
+//
+// Buns is small enough that a database would be a second system to keep
+// honest. The whole workspace is one dict; every mutation calls commit() and
+// the file is replaced atomically. A mutex keeps two requests from writing at
+// once, because the HTTP server serves connections in threads.
+
+let PATH = getenv_or("BUNS_STATE", "data/state.json")
+let LOCK = mutex()
+var STATE = null
+var LOADED = false
+
+// ------------------------------------------------------------------- time
+
+// The workspace keeps one clock. It is set to the timezone the team works in,
+// so "14:32" means the same thing to everyone reading the log.
+let TZ = 19800
+
+fn fdiv(a, b) {
+    var q = a / b
+    if a % b != 0 and (a < 0) != (b < 0) {
+        q -= 1
+    }
+    // now() is a float, so the quotient can be one. An index has to be whole.
+    return int(q)
+}
+
+export fn clock(ts) {
+    let local = ts + TZ
+    let day = fdiv(local, 86400)
+    let secs = local - day * 86400
+    let h = fdiv(secs, 3600)
+    let m = fdiv(secs - h * 3600, 60)
+    return pad2(h) + ":" + pad2(m)
+}
+
+export fn pad2(n) {
+    if n < 10 {
+        return "0" + str(n)
+    }
+    return str(n)
+}
+
+// Civil date from a day number, after Howard Hinnant. No library, no locale,
+// no surprises: the same string on every machine.
+fn civil(day) {
+    var z = day + 719468
+    let era = fdiv(z, 146097)
+    let doe = z - era * 146097
+    let yoe = fdiv(doe - fdiv(doe, 1460) + fdiv(doe, 36524) - fdiv(doe, 146096), 365)
+    var y = yoe + era * 400
+    let doy = doe - (365 * yoe + fdiv(yoe, 4) - fdiv(yoe, 100))
+    let mp = fdiv(5 * doy + 2, 153)
+    let d = doy - fdiv(153 * mp + 2, 5) + 1
+    var m = mp + 3
+    if m > 12 {
+        m -= 12
+        y += 1
+    }
+    return { "y": y, "m": m, "d": d }
+}
+
+let MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+let DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+export fn stamp(ts) {
+    let local = ts + TZ
+    let day = fdiv(local, 86400)
+    let c = civil(day)
+    return str(c["d"]) + " " + MONTHS[c["m"] - 1] + " " + str(c["y"])
+}
+
+export fn weekday(ts) {
+    let day = fdiv(ts + TZ, 86400)
+    var w = (day + 4) % 7
+    if w < 0 {
+        w += 7
+    }
+    return DAYS[w]
+}
+
+export fn ago(ts) {
+    let delta = now() - ts
+    if delta < 45 {
+        return "just now"
+    }
+    if delta < 3600 {
+        return str(fdiv(delta, 60)) + "m ago"
+    }
+    if delta < 86400 {
+        return str(fdiv(delta, 3600)) + "h ago"
+    }
+    if delta < 86400 * 7 {
+        return str(fdiv(delta, 86400)) + "d ago"
+    }
+    return stamp(ts)
+}
+
+export fn until(ts) {
+    let delta = ts - now()
+    if delta <= 0 {
+        return "now"
+    }
+    if delta < 3600 {
+        return "in " + str(fdiv(delta, 60)) + "m"
+    }
+    if delta < 86400 {
+        return "in " + str(fdiv(delta, 3600)) + "h"
+    }
+    return "in " + str(fdiv(delta, 86400)) + "d"
+}
+
+// -------------------------------------------------------------------- ids
+
+var COUNTER = 0
+
+export fn new_id(prefix) {
+    COUNTER += 1
+    return prefix + "_" + str(int(now())) + "_" + str(COUNTER)
+}
+
+// ------------------------------------------------------------------ state
+
+export fn state() {
+    if LOADED {
+        return STATE
+    }
+    lock(LOCK)
+    if not LOADED {
+        if file_exists(PATH) {
+            STATE = json_parse(read_file(PATH))
+        } else {
+            STATE = {}
+        }
+        LOADED = true
+    }
+    unlock(LOCK)
+    return STATE
+}
+
+export fn commit() {
+    lock(LOCK)
+    if not file_exists("data") {
+        make_dir("data")
+    }
+    // One write, one lock. The language has no rename, so a crash mid-write is
+    // the one failure this cannot survive; the seed rebuilds in that case.
+    write_file(PATH, json_stringify(STATE))
+    unlock(LOCK)
+}
+
+export fn reset(next) {
+    STATE = next
+    LOADED = true
+    commit()
+}
+
+// ------------------------------------------------------------------- text
+
+export fn esc(text) {
+    var out = str(text)
+    out = out.replace("&", "&amp;")
+    out = out.replace("<", "&lt;")
+    out = out.replace(">", "&gt;")
+    out = out.replace("\"", "&quot;")
+    return out
+}
+
+export fn slug(text) {
+    var out = str(text).lower()
+    var clean = ""
+    var i = 0
+    while i < len(out) {
+        let ch = out[i]
+        if (ch >= "a" and ch <= "z") or (ch >= "0" and ch <= "9") {
+            clean += ch
+        } else if len(clean) > 0 and clean[len(clean) - 1] != "-" {
+            clean += "-"
+        }
+        i += 1
+    }
+    while len(clean) > 0 and clean[len(clean) - 1] == "-" {
+        clean = clean[0:len(clean) - 1]
+    }
+    if clean == "" {
+        clean = "untitled"
+    }
+    return clean
+}
+
+export fn clip(text, n) {
+    let flat = str(text).replace("\n", " ")
+    if len(flat) <= n {
+        return flat
+    }
+    // Cut on a word, not inside one. A trailing half-word reads like a bug.
+    var cut = flat[0:n - 1]
+    var i = len(cut) - 1
+    while i > 0 and cut[i] != " " {
+        i -= 1
+    }
+    if i > n / 3 {
+        cut = cut[0:i]
+    }
+    return cut + "…"
+}
+
+export fn words(text) {
+    return len(str(text).split(" "))
+}

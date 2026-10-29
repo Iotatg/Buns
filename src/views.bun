@@ -1,0 +1,887 @@
+// src/views.bun — the six screens.
+//
+// Today, a coworker's thread, the space library, a space, a page, and the
+// page that explains what is real. Each one is a function of the store and
+// returns the middle column; the shell and the rail come from ui.bun.
+
+import { state, esc, clip, ago, clock, stamp, weekday, until, slug } from "./store.bun"
+import { icon, glyph, mark, pill, md, shell, bar, status_dot, meta_line } from "./ui.bun"
+import { open_gates, dot_runs, space_pages, page_by_id, dot_by_id } from "./agent.bun"
+
+// ---------------------------------------------------------------- helpers
+
+fn sec_head(title, note, link, link_label) {
+    var out = "<div class=\"sec-head\"><h2 class=\"sec-title\">" + esc(title) + "</h2>"
+    if note != "" {
+        out += "<span class=\"sec-note\">" + esc(note) + "</span>"
+    }
+    if link != "" {
+        out += "<a class=\"sec-link\" href=\"" + link + "\">" + esc(link_label) + icon("arrow", 12) + "</a>"
+    }
+    out += "</div>"
+    return out
+}
+
+fn count_note(n, word) {
+    if n == 1 {
+        return "1 " + word
+    }
+    return str(n) + " " + word + "s"
+}
+
+fn dur(ms) {
+    if ms >= 1000 {
+        return str(ms / 1000) + "." + str((ms % 1000) / 100) + "s"
+    }
+    return str(ms) + "ms"
+}
+
+fn run_span(run) {
+    var total = 0
+    var i = 0
+    while i < len(run["steps"]) {
+        total += run["steps"][i]["ms"]
+        i += 1
+    }
+    return dur(total)
+}
+
+fn run_state_text(run) {
+    let done = run["cursor"]
+    let all = len(run["steps"])
+    if run["status"] == "waiting" {
+        return str(done) + " of " + str(all) + " · waiting on you"
+    }
+    if run["status"] == "done" {
+        return str(all) + " steps · " + run_span(run)
+    }
+    return str(done) + " of " + str(all) + " · working"
+}
+
+fn step_mark(s) {
+    if s["state"] == "waiting" {
+        return "<span class=\"sm sm-wait\">" + icon("clock", 11) + "</span>"
+    }
+    if s["state"] == "skipped" {
+        return "<span class=\"sm sm-skip\">" + icon("x", 11) + "</span>"
+    }
+    if s["state"] == "done" or s["state"] == "applied" {
+        return "<span class=\"sm sm-done\">" + icon("check", 11) + "</span>"
+    }
+    return "<span class=\"sm sm-pend\">" + icon("dot", 11) + "</span>"
+}
+
+fn gate_text(s) {
+    if s["tool"] == "mail.send" {
+        return "Sending is the one thing I cannot take back. Approve and the messages leave; refuse and they stay as drafts."
+    }
+    if s["tool"] == "pr.open" {
+        return "A pull request is visible to the whole team. It can be closed, but not unsent."
+    }
+    if s["tool"] == "calendar.invite" {
+        return "This books an hour on someone else's calendar and emails them."
+    }
+    return "This step changes something outside the workspace."
+}
+
+// ------------------------------------------------------------------- run
+
+export fn run_card(st, run, play, start_at) {
+    let dot = dot_by_id(st, run["dot"])
+    var out = "<article class=\"run\" data-run=\"" + run["id"] + "\" data-at=\"" + str(run["at"]) + "\""
+    if play {
+        out += " data-play=\"1\" data-from=\"" + str(start_at) + "\""
+    }
+    out += ">"
+    out += "<header class=\"run-head\"><div class=\"run-title\">"
+    out += "<span class=\"run-kicker\">" + esc(run["goal"]) + "</span>"
+    out += "</div><span class=\"run-state state-" + run["status"] + "\" data-state>" + esc(run_state_text(run)) + "</span></header>"
+    out += "<ol class=\"steps\">"
+    var i = 0
+    while i < len(run["steps"]) {
+        let s = run["steps"][i]
+        var cls = "step"
+        if s["state"] == "waiting" {
+            cls += " is-waiting"
+        } else if s["state"] == "skipped" {
+            cls += " is-skipped"
+        } else if s["state"] == "done" or s["state"] == "applied" {
+            cls += " is-done"
+        }
+        out += "<li class=\"" + cls + "\" data-step=\"" + s["id"] + "\" data-ms=\"" + str(s["ms"]) + "\" data-screen=\"" + str(i) + "\">"
+        out += step_mark(s)
+        out += "<div class=\"step-main\"><span class=\"step-tool\">" + esc(s["tool"]) + "</span>"
+        out += "<span class=\"step-label\">" + esc(s["label"]) + "</span></div>"
+        out += "<span class=\"step-time\">" + dur(s["ms"]) + "</span>"
+        out += "</li>"
+        i += 1
+    }
+    out += "</ol>"
+    // Every screen of the run ships with the card, hidden. The client moves the
+    // one that matches the step it is playing into the computer panel, so the
+    // panel follows the run without a second request per step.
+    out += "<div class=\"run-screens\" hidden>"
+    var si = 0
+    while si < len(run["steps"]) {
+        let stp = run["steps"][si]
+        out += "<div class=\"scr\" data-scr=\"" + str(si) + "\" data-url=\"" + esc(screen_url(stp["screen"])) + "\" data-tool=\"" + esc(stp["tool"]) + "\">"
+        out += screen_html(stp["screen"]) + "</div>"
+        si += 1
+    }
+    out += "</div>"
+    if run["status"] == "waiting" {
+        let s = run["steps"][run["cursor"]]
+        out += "<div class=\"gate\" data-gate>"
+        out += "<div class=\"gate-body\"><span class=\"gate-ico\">" + icon("shield", 15) + "</span>"
+        out += "<div><p class=\"gate-q\">" + esc(gate_text(s)) + "</p>"
+        out += "<p class=\"gate-detail\">" + esc(s["detail"]) + "</p></div></div>"
+        out += "<div class=\"gate-acts\">"
+        out += "<button class=\"btn btn-ghost\" type=\"button\" data-refuse=\"" + run["id"] + "\">Refuse</button>"
+        out += "<button class=\"btn btn-fill\" type=\"button\" data-approve=\"" + run["id"] + "\">Approve and continue</button>"
+        out += "</div></div>"
+    }
+    if run["status"] == "done" and run["cursor"] > 0 {
+        let last = run["steps"][len(run["steps"]) - 1]
+        out += "<div class=\"run-foot\"><span class=\"run-done\">" + icon("check", 12) + " " + esc(last["detail"]) + "</span>"
+        out += "<span class=\"run-src\">" + str(len(run["steps"])) + " steps · " + run_span(run) + " · logged</span></div>"
+    }
+    out += "</article>"
+    return out
+}
+
+// ------------------------------------------------------------------ today
+
+export fn view_today(st) {
+    var body = bar(["<span class=\"crumb-now\">Today</span>"],
+        "<span class=\"bar-date\">" + weekday(now()) + " " + stamp(now()) + " · " + clock(now()) + "</span>"
+        + "<a class=\"btn btn-fill\" href=\"/dots/scout\">" + icon("plus", 13) + " Ask a coworker</a>")
+
+    let gates = open_gates(st)
+    var h = "<div class=\"view view-today\">"
+    h += "<section class=\"today-top\">"
+    h += "<h1 class=\"today-h\">" + today_headline(st, gates) + "</h1>"
+    h += "<p class=\"today-lede\">" + today_lede(st, gates) + "</p>"
+    h += "</section>"
+
+    h += "<section class=\"block\">" + sec_head("Waiting on you", count_note(len(gates), "decision"), "", "")
+    if len(gates) == 0 {
+        h += "<div class=\"empty\"><span class=\"empty-ico\">" + icon("check", 18) + "</span>"
+        h += "<p>Nothing is blocked. The next run that needs a human will appear here.</p></div>"
+    } else {
+        h += "<div class=\"gate-list\">"
+        var i = 0
+        while i < len(gates) {
+            let r = gates[i]
+            let d = dot_by_id(st, r["dot"])
+            let s = r["steps"][r["cursor"]]
+            h += "<article class=\"gate-card\" data-run=\"" + r["id"] + "\">"
+            h += "<div class=\"gc-top\">" + glyph(d, 28)
+            h += "<div class=\"gc-id\"><span class=\"gc-dot\">" + esc(d["name"]) + "</span>"
+            h += "<span class=\"gc-time\">" + ago(r["at"]) + "</span></div>"
+            h += pill("Needs approval", "wait") + "</div>"
+            h += "<p class=\"gc-goal\">" + esc(r["goal"]) + "</p>"
+            h += "<div class=\"gc-step\"><span class=\"step-tool\">" + esc(s["tool"]) + "</span>" + esc(s["label"]) + "</div>"
+            h += "<div class=\"gc-acts\">"
+            h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-refuse=\"" + r["id"] + "\">Refuse</button>"
+            h += "<button class=\"btn btn-fill btn-sm\" type=\"button\" data-approve=\"" + r["id"] + "\">Approve</button>"
+            h += "</div></article>"
+            i += 1
+        }
+        h += "</div>"
+    }
+    h += "</section>"
+
+    // working now
+    var working = []
+    var j = 0
+    while j < len(st["runs"]) {
+        if st["runs"][j]["status"] == "working" {
+            working.push(st["runs"][j])
+        }
+        j += 1
+    }
+    h += "<section class=\"block\">" + sec_head("In progress", "", "", "")
+    if len(working) == 0 {
+        h += "<p class=\"quiet\">No run is executing right now. A finished run stays in the thread it came from.</p>"
+    } else {
+        h += "<ul class=\"live-list\">"
+        var k = 0
+        while k < len(working) {
+            let r = working[k]
+            let d = dot_by_id(st, r["dot"])
+            h += "<li class=\"live\">" + glyph(d, 24)
+            h += "<span class=\"live-text\"><strong>" + esc(d["name"]) + "</strong> " + esc(r["goal"]) + "</span>"
+            h += "<span class=\"live-pct\">" + str(r["cursor"]) + "/" + str(len(r["steps"])) + "</span></li>"
+            k += 1
+        }
+        h += "</ul>"
+    }
+    h += "</section>"
+
+    h += "<div class=\"today-cols\">"
+    h += "<section class=\"block\">" + sec_head("Recent work", "", "/spaces", "All pages")
+    h += "<ul class=\"work-list\">"
+    var m = len(st["runs"]) - 1
+    var shown = 0
+    while m >= 0 and shown < 6 {
+        let r = st["runs"][m]
+        let d = dot_by_id(st, r["dot"])
+        h += "<li class=\"work\"><a class=\"work-link\" href=\"/dots/" + d["id"] + "\">"
+        h += glyph(d, 22)
+        h += "<span class=\"work-main\"><span class=\"work-goal\">" + esc(clip(r["goal"], 64)) + "</span>"
+        h += "<span class=\"work-meta\">" + esc(d["name"]) + " · " + ago(r["at"]) + " · " + run_state_text(r) + "</span></span>"
+        h += "</a></li>"
+        m -= 1
+        shown += 1
+    }
+    h += "</ul></section>"
+
+    h += "<section class=\"block\">" + sec_head("Spaces", "", "/spaces", "Library")
+    h += "<ul class=\"mini-spaces\">"
+    var n = 0
+    while n < len(st["spaces"]) {
+        let s2 = st["spaces"][n]
+        let pages = space_pages(st, s2["id"])
+        h += "<li><a class=\"mini-space\" href=\"/spaces/" + s2["id"] + "\">"
+        h += "<span class=\"space-dot\" style=\"--tone:" + s2["tone"] + "\"></span>"
+        h += "<span class=\"ms-name\">" + esc(s2["name"]) + "</span>"
+        h += "<span class=\"ms-n\">" + str(len(pages)) + " pages</span></a></li>"
+        n += 1
+    }
+    h += "</ul></section>"
+    h += "</div></div>"
+    return shell("", "Today", body + h)
+}
+
+fn today_headline(st, gates) {
+    if len(gates) == 0 {
+        return "Nothing needs you."
+    }
+    if len(gates) == 1 {
+        return "One decision is waiting."
+    }
+    return str(len(gates)) + " decisions are waiting."
+}
+
+fn today_lede(st, gates) {
+    if len(gates) == 0 {
+        return "Five coworkers, three spaces. Everything they did today is in the log."
+    }
+    return "Each one is a step a coworker stopped before taking, because it leaves the workspace."
+}
+
+// -------------------------------------------------------------------- dot
+
+export fn view_dot(st, dot, thread, focus, start_at) {
+    var runs = dot_runs(st, dot["id"])
+    var body = bar(
+        ["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">" + esc(dot["name"]) + "</span>"],
+        pill(dot["status"], dot["status"]) + "<button class=\"btn btn-ghost\" type=\"button\" data-rig-toggle aria-expanded=\"true\">"
+        + icon("screen", 13) + " Computer</button>")
+
+    var h = "<div class=\"view view-dot\" data-dot=\"" + dot["id"] + "\">"
+    h += "<div class=\"thread-col\">"
+    h += "<header class=\"dot-head\">"
+    h += "<div class=\"dot-head-top\">" + glyph(dot, 44)
+    h += "<div class=\"dh-id\"><h1 class=\"dh-name\">" + esc(dot["name"]) + "</h1>"
+    h += "<p class=\"dh-role\">" + esc(dot["role"]) + " · " + esc(dot["line"]) + "</p></div>"
+    h += "</div>"
+    h += "<div class=\"dh-now\"><span class=\"dh-now-label\">" + icon("bolt", 12) + " " + esc(dot["status"]) + "</span>"
+    h += "<span class=\"dh-now-text\">" + esc(dot["now"]) + "</span></div>"
+    h += "<div class=\"dh-skills\">"
+    var si = 0
+    while si < len(dot["skills"]) {
+        h += "<code class=\"skill\">" + esc(dot["skills"][si]) + "</code>"
+        si += 1
+    }
+    h += "</div></header>"
+
+    h += "<div class=\"thread\" data-thread=\"" + thread["id"] + "\">"
+    var i = 0
+    while i < len(thread["messages"]) {
+        let msg = thread["messages"][i]
+        if msg["role"] == "user" {
+            h += "<div class=\"msg msg-user\"><div class=\"bubble\">" + esc(msg["text"]) + "</div>"
+            h += "<span class=\"msg-time\">" + clock(msg["at"]) + "</span></div>"
+        } else {
+            h += "<div class=\"msg msg-dot\">" + glyph(dot, 24)
+            h += "<div class=\"msg-body\"><p class=\"msg-text\">" + esc(msg["text"]) + "</p>"
+            let rid = msg["run"]
+            if rid != null {
+                var r = null
+                var k = 0
+                while k < len(runs) {
+                    if runs[k]["id"] == rid {
+                        r = runs[k]
+                    }
+                    k += 1
+                }
+                if r != null {
+                    h += run_card(st, r, r["id"] == focus, start_at)
+                }
+            }
+            h += "</div></div>"
+        }
+        i += 1
+    }
+    h += "</div>"
+
+    h += "<form class=\"composer\" data-composer data-dot=\"" + dot["id"] + "\" data-thread=\"" + thread["id"] + "\">"
+    h += "<label class=\"sr\" for=\"ask\">Ask " + esc(dot["name"]) + "</label>"
+    h += "<textarea id=\"ask\" name=\"text\" rows=\"1\" placeholder=\"Ask " + esc(dot["name"]) + " for something. It will stop before anything leaves the workspace.\"></textarea>"
+    h += "<div class=\"composer-foot\"><span class=\"composer-hint\">Enter to send · Shift + Enter for a line</span>"
+    h += "<button class=\"btn btn-fill\" type=\"submit\">Send " + icon("arrow", 13) + "</button></div>"
+    h += "</form>"
+    h += "</div>"
+
+    // the computer column
+    let last_run = latest_run(runs)
+    h += "<aside class=\"rig\" data-rig>" + rig(dot, last_run) + "</aside>"
+    h += "</div>"
+    return shell(dot["id"], dot["name"], body + h)
+}
+
+fn latest_run(runs) {
+    if len(runs) == 0 {
+        return null
+    }
+    var best = runs[0]
+    var i = 1
+    while i < len(runs) {
+        if runs[i]["at"] > best["at"] {
+            best = runs[i]
+        }
+        i += 1
+    }
+    return best
+}
+
+export fn rig(dot, run) {
+    var out = "<div class=\"rig-head\"><span class=\"rig-title\">" + esc(dot["name"]) + "’s computer</span>"
+    out += "<span class=\"rig-live\"><span class=\"sd sd-work\"></span>live</span></div>"
+    var screen = {}
+    var step_label = "Nothing open"
+    var step_tool = "idle"
+    if run != null and len(run["steps"]) > 0 {
+        var idx = run["cursor"]
+        if idx >= len(run["steps"]) {
+            idx = len(run["steps"]) - 1
+        }
+        screen = run["steps"][idx]["screen"]
+        step_label = run["steps"][idx]["label"]
+        step_tool = run["steps"][idx]["tool"]
+    }
+    out += "<div class=\"screen\" data-screen-root>"
+    out += "<div class=\"chrome\"><span class=\"chrome-dots\"><i></i><i></i><i></i></span>"
+    out += "<span class=\"chrome-url\" data-url>" + esc(screen_url(screen)) + "</span>"
+    out += "<span class=\"chrome-tool\" data-tool>" + esc(step_tool) + "</span></div>"
+    out += "<div class=\"screen-body\" data-screen-body>" + screen_html(screen) + "</div>"
+    out += "</div>"
+    out += "<div class=\"rig-caption\"><span class=\"rc-label\">Now</span><span class=\"rc-text\" data-caption>" + esc(step_label) + "</span></div>"
+    if run != null {
+        out += "<div class=\"rig-log\"><span class=\"rl-head\">Run log</span><ol class=\"rl-list\" data-log>"
+        var i = 0
+        while i < len(run["steps"]) {
+            let s = run["steps"][i]
+            out += "<li class=\"rl-item rl-" + s["state"] + "\" data-log-step=\"" + str(i) + "\">"
+            out += "<span class=\"rl-tool\">" + esc(s["tool"]) + "</span>"
+            out += "<span class=\"rl-label\">" + esc(clip(s["label"], 52)) + "</span>"
+            out += "<span class=\"rl-ms\">" + dur(s["ms"]) + "</span></li>"
+            i += 1
+        }
+        out += "</ol></div>"
+    }
+    return out
+}
+
+fn screen_url(screen) {
+    if screen == null {
+        return "buns://idle"
+    }
+    let u = screen["url"]
+    if u == null {
+        return "buns://idle"
+    }
+    return u
+}
+
+export fn screen_html(screen) {
+    if screen == null or screen["kind"] == null {
+        return "<div class=\"sc-idle\"><span class=\"sc-idle-mark\">" + mark(28) + "</span><p>No window open. Ask for something and the screen follows the work.</p></div>"
+    }
+    let kind = screen["kind"]
+    var out = "<div class=\"sc sc-" + kind + "\">"
+    if kind == "search" {
+        out += "<div class=\"sc-searchbar\">" + icon("search", 13) + "<span>" + esc(screen["url"].replace("search.buns/", "")) + "</span></div>"
+        out += "<ul class=\"sc-hits\">"
+        var i = 0
+        while i < len(screen["hits"]) {
+            let hit = screen["hits"][i]
+            out += "<li class=\"sc-hit\"><span class=\"sc-site\">" + esc(hit["site"]) + "</span>"
+            out += "<span class=\"sc-hit-title\">" + esc(hit["title"]) + "</span>"
+            out += "<span class=\"sc-hit-note\">" + esc(hit["note"]) + "</span></li>"
+            i += 1
+        }
+        out += "</ul>"
+    } else if kind == "compose" {
+        out += "<div class=\"sc-mail\">"
+        out += "<div class=\"sc-mail-head\"><span>" + esc(screen["title"]) + "</span><span class=\"sc-mail-act\">Draft</span></div>"
+        out += "<div class=\"sc-mail-body\">"
+        var jm = 0
+        while jm < len(screen["lines"]) {
+            let line = screen["lines"][jm]
+            if jm == 0 {
+                out += "<p class=\"sc-mail-subject\">" + esc(line) + "</p>"
+            } else {
+                out += "<p>" + esc(line) + "</p>"
+            }
+            jm += 1
+        }
+        var fr = len(screen["lines"])
+        while fr < 5 {
+            out += "<span class=\"sc-rule\"></span>"
+            fr += 1
+        }
+        out += "</div></div>"
+    } else if kind == "reader" or kind == "doc" or kind == "mail" or kind == "calendar" {
+        out += "<div class=\"sc-doc\"><p class=\"sc-doc-title\">" + esc(screen["title"]) + "</p>"
+        var j = 0
+        while j < len(screen["lines"]) {
+            let line = screen["lines"][j]
+            if line.starts_with("## ") {
+                out += "<p class=\"sc-h\">" + esc(line[3:]) + "</p>"
+            } else if len(line) == 0 {
+                out += "<p class=\"sc-gap\"></p>"
+            } else {
+                out += "<p>" + esc(line) + "</p>"
+            }
+            j += 1
+        }
+        out += "</div>"
+    } else if kind == "sheet" {
+        out += "<div class=\"sc-sheet\"><div class=\"sc-sheet-name\">" + esc(screen["title"]) + "</div>"
+        out += "<table><thead><tr>"
+        var c = 0
+        while c < len(screen["columns"]) {
+            out += "<th>" + esc(screen["columns"][c]) + "</th>"
+            c += 1
+        }
+        out += "</tr></thead><tbody>"
+        var r = 0
+        while r < len(screen["rows"]) {
+            let row = screen["rows"][r]
+            var cls = ""
+            if row["flag"] {
+                cls = " class=\"is-flag\""
+            }
+            out += "<tr" + cls + ">"
+            var k = 0
+            while k < len(row["cells"]) {
+                out += "<td>" + esc(row["cells"][k]) + "</td>"
+                k += 1
+            }
+            out += "</tr>"
+            r += 1
+        }
+        out += "</tbody></table></div>"
+    } else {
+        // code, diff, terminal
+        out += "<div class=\"sc-code\">"
+        var j2 = 0
+        while j2 < len(screen["lines"]) {
+            let line = screen["lines"][j2]
+            var cls2 = "cl"
+            if line.starts_with("+") {
+                cls2 = "cl add"
+            } else if line.starts_with("−") {
+                cls2 = "cl del"
+            }
+            out += "<span class=\"" + cls2 + "\">" + esc(line) + "</span>"
+            j2 += 1
+        }
+        out += "</div>"
+    }
+    out += "</div>"
+    return out
+}
+
+// ----------------------------------------------------------------- spaces
+
+export fn view_spaces(st) {
+    var body = bar(["<span class=\"crumb-now\">Spaces</span>"],
+        "<label class=\"search\">" + icon("search", 13) + "<input type=\"search\" placeholder=\"Search pages\" data-filter></label>"
+        + "<div class=\"seg\" role=\"group\" aria-label=\"View\">"
+        + "<button class=\"seg-btn is-on\" type=\"button\" data-view=\"grid\" aria-pressed=\"true\">" + icon("grid", 13) + "</button>"
+        + "<button class=\"seg-btn\" type=\"button\" data-view=\"list\" aria-pressed=\"false\">" + icon("list", 13) + "</button></div>")
+
+    var h = "<div class=\"view view-spaces\">"
+    h += "<h1 class=\"page-h\">Three spaces,<br>one workspace.</h1>"
+    h += "<p class=\"page-lede\">A space is a home for working documents. Coworkers can be given access to one or several, and every page says who wrote it.</p>"
+
+    h += "<div class=\"space-grid\" data-space-grid>"
+    var i = 0
+    while i < len(st["spaces"]) {
+        let s = st["spaces"][i]
+        let pages = space_pages(st, s["id"])
+        var latest = 0
+        var p = 0
+        while p < len(pages) {
+            if pages[p]["at"] > latest {
+                latest = pages[p]["at"]
+            }
+            p += 1
+        }
+        h += "<a class=\"space-card\" href=\"/spaces/" + s["id"] + "\" style=\"--tone:" + s["tone"] + "\">"
+        h += "<span class=\"sc-tone\"></span>"
+        h += "<span class=\"sc-top\"><span class=\"sc-name\">" + esc(s["name"]) + "</span>"
+        h += "<span class=\"sc-count\">" + str(len(pages)) + "</span></span>"
+        h += "<span class=\"sc-desc\">" + esc(s["desc"]) + "</span>"
+        h += "<span class=\"sc-foot\"><span class=\"sc-av\">"
+        var m = 0
+        while m < len(s["members"]) {
+            let d = dot_by_id(st, s["members"][m])
+            h += glyph(d, 20)
+            m += 1
+        }
+        h += "</span><span class=\"sc-when\">" + ago(latest) + "</span></span>"
+        h += "</a>"
+        i += 1
+    }
+    h += "</div>"
+
+    h += "<section class=\"block\">" + sec_head("All pages", str(len(st["pages"])) + " documents", "", "")
+    h += "<ul class=\"page-list\" data-page-list>"
+    var j = 0
+    var rows = sorted_pages(st)
+    while j < len(rows) {
+        let pg = rows[j]
+        let d = dot_by_id(st, pg["by"])
+        let sp = null_space(st, pg["space"])
+        h += "<li class=\"pl-row\" data-title=\"" + esc(pg["title"].lower()) + "\" data-space=\"" + esc(sp["name"].lower()) + "\">"
+        h += "<a class=\"pl-link\" href=\"/spaces/" + pg["space"] + "/p/" + pg["id"] + "\">"
+        h += "<span class=\"pl-title\">" + esc(pg["title"]) + "</span>"
+        h += "<span class=\"pl-space\"><span class=\"space-dot\" style=\"--tone:" + sp["tone"] + "\"></span>" + esc(sp["name"]) + "</span>"
+        h += "<span class=\"pl-by\">" + esc(d["name"]) + "</span>"
+        h += "<span class=\"pl-when\">" + ago(pg["at"]) + "</span>"
+        h += "<span class=\"pl-rev\">r" + str(pg["rev"]) + "</span>"
+        h += "</a></li>"
+        j += 1
+    }
+    h += "</ul><div class=\"empty\" data-filter-empty hidden><p>No page matches that.</p></div>"
+    h += "</section></div>"
+    return shell("", "Spaces", body + h)
+}
+
+fn null_space(st, id) {
+    var i = 0
+    while i < len(st["spaces"]) {
+        if st["spaces"][i]["id"] == id {
+            return st["spaces"][i]
+        }
+        i += 1
+    }
+    return st["spaces"][0]
+}
+
+fn sorted_pages(st) {
+    var rows = []
+    var i = 0
+    while i < len(st["pages"]) {
+        rows.push(st["pages"][i])
+        i += 1
+    }
+    var out = []
+    while len(rows) > 0 {
+        var best = 0
+        var k = 1
+        while k < len(rows) {
+            if rows[k]["at"] > rows[best]["at"] {
+                best = k
+            }
+            k += 1
+        }
+        out.push(rows[best])
+        rows.splice(best, 1)
+    }
+    return out
+}
+
+// ------------------------------------------------------------------ space
+
+export fn view_space(st, space) {
+    var body = bar(["<a href=\"/spaces\">Spaces</a>", "<span class=\"crumb-now\">" + esc(space["name"]) + "</span>"],
+        "<button class=\"btn btn-fill\" type=\"button\" data-new-page=\"" + space["id"] + "\">" + icon("plus", 13) + " New page</button>")
+
+    var h = "<div class=\"view view-space\" style=\"--tone:" + space["tone"] + "\">"
+    h += "<header class=\"space-head\"><span class=\"sh-tone\"></span>"
+    h += "<h1 class=\"page-h sh-h\">" + esc(space["name"]) + "</h1>"
+    h += "<p class=\"page-lede\">" + esc(space["desc"]) + "</p>"
+    h += "<div class=\"sh-meta\"><span>" + str(len(space_pages(st, space["id"]))) + " pages</span><span class=\"meta-sep\">·</span>"
+    h += "<span class=\"sh-av\">"
+    var i = 0
+    while i < len(space["members"]) {
+        h += glyph(dot_by_id(st, space["members"][i]), 20)
+        i += 1
+    }
+    h += "</span><span>can write here</span></div></header>"
+
+    h += "<div class=\"space-cols\"><div class=\"tree\">"
+    var roots = root_pages(st, space["id"])
+    var r = 0
+    while r < len(roots) {
+        h += tree_row(st, roots[r], 0, space)
+        var kids = children_of(st, roots[r]["id"])
+        var c = 0
+        while c < len(kids) {
+            h += tree_row(st, kids[c], 1, space)
+            c += 1
+        }
+        r += 1
+    }
+    h += "</div>"
+
+    h += "<aside class=\"space-side\">"
+    h += "<div class=\"ds-block\"><span class=\"ds-head\">Who writes here</span><ul class=\"who-list\">"
+    var m = 0
+    while m < len(space["members"]) {
+        let d = dot_by_id(st, space["members"][m])
+        h += "<li class=\"who\">" + glyph(d, 24)
+        h += "<span class=\"who-id\"><span class=\"who-name\">" + esc(d["name"]) + "</span>"
+        h += "<span class=\"who-role\">" + esc(d["role"]) + "</span></span>"
+        h += "<span class=\"who-state sd sd-" + d["status"] + "\"></span></li>"
+        m += 1
+    }
+    h += "</ul></div>"
+
+    h += "<div class=\"ds-block\"><span class=\"ds-head\">Recent runs</span><ul class=\"side-runs\">"
+    var runs_here = space_runs(st, space)
+    var q = 0
+    while q < len(runs_here) and q < 4 {
+        let run = runs_here[q]
+        let d2 = dot_by_id(st, run["dot"])
+        h += "<li class=\"side-run\"><a href=\"/dots/" + d2["id"] + "\">"
+        h += "<span class=\"sr-goal\">" + esc(clip(run["goal"], 48)) + "</span>"
+        h += "<span class=\"sr-meta\">" + esc(d2["name"]) + " · " + ago(run["at"]) + " · " + esc(run["status"]) + "</span>"
+        h += "</a></li>"
+        q += 1
+    }
+    if len(runs_here) == 0 {
+        h += "<li class=\"quiet\">No run has touched this space yet.</li>"
+    }
+    h += "</ul></div></aside></div></div>"
+    return shell(space["id"], space["name"], body + h)
+}
+
+fn space_runs(st, space) {
+    var out = []
+    var i = 0
+    while i < len(st["runs"]) {
+        let r = st["runs"][i]
+        if space["members"].contains(r["dot"]) {
+            out.push(r)
+        }
+        i += 1
+    }
+    // newest first
+    var sorted = []
+    while len(out) > 0 {
+        var best = 0
+        var k = 1
+        while k < len(out) {
+            if out[k]["at"] > out[best]["at"] {
+                best = k
+            }
+            k += 1
+        }
+        sorted.push(out[best])
+        out.splice(best, 1)
+    }
+    return sorted
+}
+
+fn root_pages(st, space_id) {
+    var out = []
+    var i = 0
+    while i < len(st["pages"]) {
+        let p = st["pages"][i]
+        if p["space"] == space_id and p["parent"] == null {
+            out.push(p)
+        }
+        i += 1
+    }
+    return out
+}
+
+fn children_of(st, parent) {
+    var out = []
+    var i = 0
+    while i < len(st["pages"]) {
+        if st["pages"][i]["parent"] == parent {
+            out.push(st["pages"][i])
+        }
+        i += 1
+    }
+    return out
+}
+
+fn tree_row(st, page, depth, space) {
+    let d = dot_by_id(st, page["by"])
+    var out = "<a class=\"tree-row depth-" + str(depth) + "\" href=\"/spaces/" + space["id"] + "/p/" + page["id"] + "\">"
+    out += "<span class=\"tr-ico\">" + icon("doc", 14) + "</span>"
+    out += "<span class=\"tr-title\">" + esc(page["title"]) + "</span>"
+    out += "<span class=\"tr-by\">" + glyph(d, 18) + esc(d["name"]) + "</span>"
+    out += "<span class=\"tr-when\">" + ago(page["at"]) + "</span>"
+    out += "<span class=\"tr-rev\">r" + str(page["rev"]) + "</span>"
+    out += "</a>"
+    return out
+}
+
+// ------------------------------------------------------------------- page
+
+export fn view_page(st, space, page) {
+    let d = dot_by_id(st, page["by"])
+    var body = bar(
+        ["<a href=\"/spaces\">Spaces</a>", "<a href=\"/spaces/" + space["id"] + "\">" + esc(space["name"]) + "</a>",
+         "<span class=\"crumb-now\">" + esc(clip(page["title"], 40)) + "</span>"],
+        "<span class=\"bar-date\" data-save-state>Saved · r" + str(page["rev"]) + "</span>"
+        + "<button class=\"btn btn-ghost\" type=\"button\" data-edit>" + icon("doc", 13) + " Edit</button>")
+
+    var h = "<div class=\"view view-page\" data-page=\"" + page["id"] + "\" data-rev=\"" + str(page["rev"]) + "\">"
+    h += "<article class=\"doc\">"
+    h += "<header class=\"doc-head\"><h1 class=\"doc-title\">" + esc(page["title"]) + "</h1>"
+    h += "<div class=\"doc-meta\">" + glyph(d, 20) + "<span>" + esc(d["name"]) + "</span>"
+    h += "<span class=\"meta-sep\">·</span><span>" + ago(page["at"]) + "</span>"
+    h += "<span class=\"meta-sep\">·</span><span class=\"doc-rev\">revision " + str(page["rev"]) + "</span>"
+    h += "<span class=\"meta-sep\">·</span><span class=\"doc-space\"><span class=\"space-dot\" style=\"--tone:" + space["tone"] + "\"></span>" + esc(space["name"]) + "</span></div></header>"
+    h += "<div class=\"doc-body\" data-doc-body>" + md(page["body"]) + "</div>"
+    h += "<div class=\"doc-edit\" data-doc-edit hidden><textarea data-doc-input spellcheck=\"false\">" + esc(page["body"]) + "</textarea>"
+    h += "<div class=\"de-foot\"><span class=\"de-hint\">Markdown. Saves as you type; a stale revision is refused, not merged.</span>"
+    h += "<button class=\"btn btn-ghost btn-sm\" type=\"button\" data-edit-cancel>Close</button></div></div>"
+    h += "<footer class=\"doc-foot\"><span class=\"df-note\">" + icon("shield", 12) + " Written by " + esc(d["name"]) + ", editable by you.</span>"
+    h += "<a class=\"df-ask\" href=\"/dots/" + d["id"] + "\">Ask " + esc(d["name"]) + " about this page " + icon("arrow-ne", 12) + "</a></footer>"
+    h += "</article>"
+
+    h += "<aside class=\"doc-side\">"
+    h += "<div class=\"ds-block\"><span class=\"ds-head\">In this space</span><ul class=\"ds-list\">"
+    var sibs = space_pages(st, space["id"])
+    var i = 0
+    while i < len(sibs) {
+        var cls = "ds-item"
+        if sibs[i]["id"] == page["id"] {
+            cls += " is-on"
+        }
+        h += "<li><a class=\"" + cls + "\" href=\"/spaces/" + space["id"] + "/p/" + sibs[i]["id"] + "\">" + esc(clip(sibs[i]["title"], 34)) + "</a></li>"
+        i += 1
+    }
+    h += "</ul></div>"
+    h += "<div class=\"ds-block\"><span class=\"ds-head\">History</span>"
+    h += "<ul class=\"ds-hist\"><li><span class=\"dh-when\">" + ago(page["at"]) + "</span><span class=\"dh-what\">r" + str(page["rev"]) + " · " + esc(d["name"]) + " wrote this</span></li>"
+    h += "<li><span class=\"dh-when\">" + stamp(page["at"]) + "</span><span class=\"dh-what\">created in " + esc(space["name"]) + "</span></li></ul></div>"
+    h += "</aside></div>"
+    return shell(space["id"], page["title"], body + h)
+}
+
+// ----------------------------------------------------------------- search
+
+export fn view_search(st, q) {
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">Search</span>"],
+        "<form class=\"search search-bar\" action=\"/search\" method=\"get\">" + icon("search", 13)
+        + "<input type=\"search\" name=\"q\" value=\"" + esc(q) + "\" placeholder=\"Search pages and sources\"></form>")
+
+    var pages = []
+    var i = 0
+    let needle = q.lower()
+    while i < len(st["pages"]) {
+        let p = st["pages"][i]
+        if needle == "" or p["title"].lower().contains(needle) or p["body"].lower().contains(needle) {
+            pages.push(p)
+        }
+        i += 1
+    }
+    var sources = []
+    var j = 0
+    while j < len(st["corpus"]) {
+        let c = st["corpus"][j]
+        if needle == "" or c["title"].lower().contains(needle) or c["body"].lower().contains(needle) {
+            sources.push(c)
+        }
+        j += 1
+    }
+
+    var h = "<div class=\"view view-search\">"
+    h += "<h1 class=\"page-h\">" + str(len(pages) + len(sources)) + " results<span class=\"ph-quiet\"> for “" + esc(q) + "”</span></h1>"
+    h += "<section class=\"block\">" + sec_head("Pages", str(len(pages)), "", "")
+    if len(pages) == 0 {
+        h += "<p class=\"quiet\">No page contains that. The coworkers can look outside the workspace — ask one.</p>"
+    } else {
+        h += "<ul class=\"page-list\">"
+        var k = 0
+        while k < len(pages) {
+            let pg = pages[k]
+            let sp = null_space(st, pg["space"])
+            h += "<li class=\"pl-row\"><a class=\"pl-link\" href=\"/spaces/" + pg["space"] + "/p/" + pg["id"] + "\">"
+            h += "<span class=\"pl-title\">" + esc(pg["title"]) + "</span>"
+            h += "<span class=\"pl-space\"><span class=\"space-dot\" style=\"--tone:" + sp["tone"] + "\"></span>" + esc(sp["name"]) + "</span>"
+            h += "<span class=\"pl-by\">" + esc(dot_by_id(st, pg["by"])["name"]) + "</span>"
+            h += "<span class=\"pl-when\">" + ago(pg["at"]) + "</span><span class=\"pl-rev\">r" + str(pg["rev"]) + "</span>"
+            h += "</a></li>"
+            k += 1
+        }
+        h += "</ul>"
+    }
+    h += "</section>"
+    h += "<section class=\"block\">" + sec_head("Sources", str(len(sources)), "", "")
+    if len(sources) == 0 {
+        h += "<p class=\"quiet\">Nothing in the corpus.</p>"
+    } else {
+        h += "<ul class=\"src-list\">"
+        var m = 0
+        while m < len(sources) {
+            let c = sources[m]
+            h += "<li class=\"src\"><span class=\"src-site\">" + esc(c["site"]) + "</span>"
+            h += "<span class=\"src-title\">" + esc(c["title"]) + "</span>"
+            h += "<span class=\"src-note\">" + esc(clip(c["snippet"], 110)) + "</span></li>"
+            m += 1
+        }
+        h += "</ul>"
+    }
+    h += "</section></div>"
+    return shell("", "Search", body + h)
+}
+
+// ------------------------------------------------------------------ about
+
+export fn view_about(st) {
+    var body = bar(["<a href=\"/\">Today</a>", "<span class=\"crumb-now\">How Buns works</span>"], "")
+    var h = "<div class=\"view view-about\">"
+    h += "<h1 class=\"page-h\">What is real,<br>and what is not.</h1>"
+    h += "<p class=\"page-lede\">Buns is a workspace where the coworkers have their own computer and stop before they do anything that leaves the building. This page is the honest description of the machinery.</p>"
+
+    h += "<div class=\"about-grid\">"
+    h += "<section class=\"ab-block\"><h2>The plan is a rule engine</h2>"
+    h += "<p>There is no model call in this build. <code>plan()</code> reads the words in your request and picks one of five playbooks, then fills it from the workspace: the search screen lists the actual corpus, the inbox screen lists the actual unread mail.</p>"
+    h += "<p>Swapping it for a model means replacing one function. The rest — the approvals, the artifacts, the log — is the part that has to be right either way.</p></section>"
+
+    h += "<section class=\"ab-block\"><h2>The computer is drawn, not captured</h2>"
+    h += "<p>Every screen in the right column is generated HTML from the step that produced it. Nothing is a screenshot and nothing is recorded: the reader shows the document the coworker actually read, the sheet shows the rows it actually read.</p></section>"
+
+    h += "<section class=\"ab-block\"><h2>A gate is a real stop</h2>"
+    h += "<p>Steps marked with a risk cannot run until someone approves them. The run halts, the step waits, and the effect — sending mail, opening a pull request, booking an hour — is applied only on approval. Refusing records the refusal and moves on.</p></section>"
+
+    h += "<section class=\"ab-block\"><h2>One file, written through</h2>"
+    h += "<p>The whole workspace is one JSON document. Every mutation writes the file behind a mutex. There is no database, because at this size a database would be a second system to keep honest.</p></section>"
+
+    h += "<section class=\"ab-block\"><h2>Built in the Bun language</h2>"
+    h += "<p>The server is a raw-socket HTTP/1.1 implementation in 414 lines, the views are string concatenation, and the store is <code>read_file</code> and <code>write_file</code>. No framework, no bundler, no runtime dependencies.</p>"
+    h += "<p>This build uses the language's newer surface: compound assignment, <code>++</code>, <code>??</code>, match expressions, and struct methods.</p></section>"
+
+    h += "<section class=\"ab-block\"><h2>What is missing</h2>"
+    h += "<ul><li>No authentication. One workspace, one person, local only.</li>"
+    h += "<li>No model. The planner is deterministic, so the same request always produces the same plan.</li>"
+    h += "<li>No channels. Slack and calls are modelled as mail and calendar, not connected.</li>"
+    h += "<li>No real mail. The outbox is a list in the JSON file.</li></ul></section>"
+    h += "</div>"
+    h += "<p class=\"about-foot\">A study of <a href=\"https://github.com/CopilotKit/OpenDots\">OpenDots</a>, rebuilt in a language with no framework at all.</p>"
+    h += "</div>"
+    return shell("", "How Buns works", body + h)
+}

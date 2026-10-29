@@ -1,0 +1,697 @@
+// src/seed.bun — the workspace Buns ships with.
+//
+// A demo that starts empty cannot show what the product is for. This is one
+// small company's workspace on a Tuesday: five coworkers, three spaces, a
+// research corpus, an inbox, a pipeline sheet, and two runs — one finished,
+// one waiting on a human.
+
+
+fn joinl(lines) {
+    return lines.join("\n")
+}
+
+export fn seed() {
+    let t = now()
+    var st = {}
+
+    st["workspace"] = {
+        "name": "Aurelia",
+        "plan": "Team",
+        "seats": 6,
+        "since": t - 86400 * 214
+    }
+
+    // ------------------------------------------------------------- people
+    st["dots"] = [
+        {
+            "id": "scout",
+            "name": "Scout",
+            "role": "Research",
+            "line": "Reads the market, writes the brief.",
+            "tone": "#c2410c",
+            "glyph": "search",
+            "status": "idle",
+            "now": "Last wrote the buyer brief",
+            "skills": ["web.search", "web.open", "doc.write"],
+            "spaces": ["launch", "brand"]
+        },
+        {
+            "id": "ledger",
+            "name": "Ledger",
+            "role": "Finance",
+            "line": "Watches the pipeline, drafts the invoice.",
+            "tone": "#2f6b4f",
+            "glyph": "ledger",
+            "status": "idle",
+            "now": "Last closed the September close",
+            "skills": ["sheet.read", "sheet.write", "doc.write"],
+            "spaces": ["ops"]
+        },
+        {
+            "id": "post",
+            "name": "Post",
+            "role": "Comms",
+            "line": "Answers the inbox. Holds what you should not send.",
+            "tone": "#3f5b8b",
+            "glyph": "mail",
+            "status": "waiting",
+            "now": "Three replies drafted, waiting on you",
+            "skills": ["inbox.read", "mail.draft", "mail.send"],
+            "spaces": ["launch"]
+        },
+        {
+            "id": "forge",
+            "name": "Forge",
+            "role": "Engineering",
+            "line": "Reads the repo, opens the pull request.",
+            "tone": "#7a3f63",
+            "glyph": "code",
+            "status": "idle",
+            "now": "Last shipped the export fix",
+            "skills": ["repo.read", "repo.patch", "ci.test", "pr.open"],
+            "spaces": ["ops"]
+        },
+        {
+            "id": "relay",
+            "name": "Relay",
+            "role": "Operations",
+            "line": "Finds the hour that works, books it.",
+            "tone": "#a16207",
+            "glyph": "calendar",
+            "status": "idle",
+            "now": "Free until the 14:00 review",
+            "skills": ["calendar.read", "calendar.invite", "mail.send"],
+            "spaces": ["ops"]
+        }
+    ]
+
+    // ------------------------------------------------------------- spaces
+    st["spaces"] = [
+        {
+            "id": "launch",
+            "name": "Aurelia launch",
+            "desc": "Everything the October launch needs: positioning, proof, and the sequence.",
+            "tone": "#c2410c",
+            "members": ["scout", "post", "relay"]
+        },
+        {
+            "id": "ops",
+            "name": "Operations",
+            "desc": "The weekly rhythm — pipeline, close, incidents, and the decisions between them.",
+            "tone": "#2f6b4f",
+            "members": ["ledger", "forge", "relay"]
+        },
+        {
+            "id": "brand",
+            "name": "Brand",
+            "desc": "Voice, naming, and the things we have decided not to say.",
+            "tone": "#3f5b8b",
+            "members": ["scout", "post"]
+        }
+    ]
+
+    // -------------------------------------------------------------- pages
+    st["pages"] = [
+        {
+            "id": "p_brief",
+            "space": "launch",
+            "parent": null,
+            "title": "Buyer brief — mid-market operations",
+            "by": "scout",
+            "rev": 4,
+            "at": t - 3600 * 2,
+            "body": joinl([
+                "## What we heard",
+                "",
+                "Fourteen calls with operations leads between 80 and 400 staff. The pattern was",
+                "uncomfortably consistent: nobody is shopping for an ERP. They are shopping for the",
+                "end of a spreadsheet that three people maintain by hand.",
+                "",
+                "- **Price is not the objection.** Integration time is. Every buyer asked some version",
+                "  of *how long until this touches the ledger*, and every one of them had been burned.",
+                "- **The champion is not IT.** It is the operations manager who owns the month-end.",
+                "  IT signs, but they do not choose.",
+                "- **\"ERP\" is a warning word.** Three buyers used it as a reason to end the call.",
+                "",
+                "## What this means for the launch",
+                "",
+                "Lead with the first week, not the platform. The proof is a reconciled close, not a",
+                "feature grid. The word *ERP* belongs in the comparison page and nowhere else.",
+                "",
+                "> The buying committee is one person with a spreadsheet and a grudge.",
+                "",
+                "## Open questions",
+                "",
+                "1. Does the manufacturing segment behave the same way below 120 staff?",
+                "2. What is the actual cost of a bad migration, in their words?",
+                "3. Which of the fourteen would take a reference call?"
+            ])
+        },
+        {
+            "id": "p_launch_plan",
+            "space": "launch",
+            "parent": null,
+            "title": "Launch sequence",
+            "by": "relay",
+            "rev": 7,
+            "at": t - 3600 * 26,
+            "body": joinl([
+                "## Six weeks, four beats",
+                "",
+                "| Week | Beat | Owner | Done |",
+                "| --- | --- | --- | --- |",
+                "| 1 | Brief and message house | Scout | yes |",
+                "| 2 | Proof page and three references | Post | yes |",
+                "| 3 | Private beta invitations | Relay | in flight |",
+                "| 4 | Public page, pricing, and the comparison | Scout | no |",
+                "",
+                "## The one rule",
+                "",
+                "Nothing ships that has not been read by someone who was on the calls. The brief is",
+                "the source; the page is the echo."
+            ])
+        },
+        {
+            "id": "p_proof",
+            "space": "launch",
+            "parent": "p_launch_plan",
+            "title": "Proof page — what we can claim",
+            "by": "post",
+            "rev": 2,
+            "at": t - 3600 * 30,
+            "body": joinl([
+                "## Claims with a number behind them",
+                "",
+                "- **Six weeks to a reconciled close.** Northwind, 140 staff, three entities.",
+                "- **92% of purchase orders matched without a human.** Cascade, twelve months of data.",
+                "- **One person runs month-end.** Melrose, down from four.",
+                "",
+                "## Claims we cannot make yet",
+                "",
+                "- Anything about manufacturing below 120 staff. We have two data points.",
+                "- Anything about migration time. Nobody has measured it honestly.",
+                "",
+                "The second list is the more useful one. It is also the reason the page will be",
+                "believed."
+            ])
+        },
+        {
+            "id": "p_voice",
+            "space": "brand",
+            "parent": null,
+            "title": "Voice: the short version",
+            "by": "post",
+            "rev": 5,
+            "at": t - 86400 * 3,
+            "body": joinl([
+                "## Four rules",
+                "",
+                "1. **Say the number.** If there is no number, say what happened instead.",
+                "2. **Short sentences carry weight.** Long ones carry doubt.",
+                "3. **Never say solution.** Say what the thing does.",
+                "4. **Admit the limit in the same breath as the claim.**",
+                "",
+                "## Words we do not use",
+                "",
+                "seamless, robust, empower, unlock, revolutionary, best-in-class, world-class,",
+                "cutting-edge, leverage (as a verb), synergy, holistic.",
+                "",
+                "## An example",
+                "",
+                "Before: *Our seamless platform empowers operations teams to unlock efficiency.*",
+                "",
+                "After: *Close the month in six weeks. One person. No reconciliation spreadsheet.*"
+            ])
+        },
+        {
+            "id": "p_naming",
+            "space": "brand",
+            "parent": "p_voice",
+            "title": "Naming notes",
+            "by": "scout",
+            "rev": 1,
+            "at": t - 86400 * 5,
+            "body": joinl([
+                "Aurelia was chosen because it is a word people can spell after hearing it once, and",
+                "because it does not contain a metaphor about light, speed, or connection.",
+                "",
+                "Rejected: Lumen, Vela, Northstar, Kite, Meridian. Each one is a company that already",
+                "exists in this category or an adjacent one."
+            ])
+        },
+        {
+            "id": "p_close",
+            "space": "ops",
+            "parent": null,
+            "title": "September close — what broke",
+            "by": "ledger",
+            "rev": 3,
+            "at": t - 3600 * 20,
+            "body": joinl([
+                "## The close took nine days",
+                "",
+                "Target was five. The overrun was one thing, repeated: three entities post freight",
+                "differently, and the consolidation sheet assumes one method.",
+                "",
+                "- Entity A capitalises freight into inventory.",
+                "- Entity B expenses it at receipt.",
+                "- Entity C splits it by weight.",
+                "",
+                "## The fix",
+                "",
+                "One allocation rule per entity, set once, applied at posting. Ledger has the change",
+                "drafted; it needs a decision on entity C before it can be applied.",
+                "",
+                "## Cost of the delay",
+                "",
+                "Nine days of a frozen period is roughly €18k of working capital sitting still. That",
+                "is the number to put in front of the decision."
+            ])
+        },
+        {
+            "id": "p_pipeline",
+            "space": "ops",
+            "parent": null,
+            "title": "Pipeline review — week 43",
+            "by": "ledger",
+            "rev": 2,
+            "at": t - 3600 * 8,
+            "body": joinl([
+                "## Where the quarter stands",
+                "",
+                "Committed is behind by 11%. Weighted is ahead by 4%. The gap is one deal — Northwind",
+                "— which is real but slow, and two that should not be in committed at all.",
+                "",
+                "## Recommendation",
+                "",
+                "Move Cascade and Orlo to best case. The quarter is then honest, and still short by",
+                "one mid-size deal. Start the reference motion now rather than in January."
+            ])
+        },
+        {
+            "id": "p_incident",
+            "space": "ops",
+            "parent": null,
+            "title": "Export job — postmortem",
+            "by": "forge",
+            "rev": 2,
+            "at": t - 86400 * 2,
+            "body": joinl([
+                "## What happened",
+                "",
+                "The nightly export wrote a partial file when the upstream read timed out at 04:12.",
+                "Downstream picked it up at 04:15 and loaded 61% of the rows. No alert fired because",
+                "the job exited zero.",
+                "",
+                "## Why it exited zero",
+                "",
+                "The writer catches the timeout, logs it, and returns success. That has been true",
+                "since the first version and nobody read that line.",
+                "",
+                "## The change",
+                "",
+                "A partial write now exits non-zero and leaves no file. The loader refuses a file",
+                "without a completion marker. Both changes are in the pull request; the marker is the",
+                "one that matters, because it fixes the class and not the instance."
+            ])
+        }
+    ]
+
+    // ------------------------------------------------------------- corpus
+    st["corpus"] = [
+        {
+            "id": "c1",
+            "title": "Mid-market operations software: the 2026 buyer survey",
+            "site": "fieldnotes.example",
+            "url": "fieldnotes.example/surveys/ops-2026",
+            "snippet": "412 operations leads on what actually stalls a rollout. Integration time ranks first for the fourth year.",
+            "body": joinl([
+                "412 operations leads, 80–400 staff, across manufacturing, distribution and food.",
+                "",
+                "The ranking of what stalls a rollout has not moved in four years: integration time",
+                "(61%), data quality (48%), internal ownership (39%), price (22%).",
+                "",
+                "The survey's own conclusion is blunter than the data: buyers do not evaluate",
+                "software, they evaluate the first month."
+            ])
+        },
+        {
+            "id": "c2",
+            "title": "Why ERP replacements fail — a postmortem collection",
+            "site": "stackpost.example",
+            "url": "stackpost.example/erp-failures",
+            "snippet": "Thirty-one write-ups of failed replacements, coded by cause. The most common cause is not the software.",
+            "body": joinl([
+                "Thirty-one public write-ups, coded by first cause.",
+                "",
+                "Ownership gap: 14. Scope creep in the first quarter: 9. Vendor over-promise: 5.",
+                "Software defect: 3.",
+                "",
+                "The recurring sentence is some version of: we bought it, and then nobody's job was",
+                "to make it true."
+            ])
+        },
+        {
+            "id": "c3",
+            "title": "Northwind: three entities, one close",
+            "site": "northwind.example",
+            "url": "northwind.example/customers/close",
+            "snippet": "How a 140-person distributor closed in six weeks after years of nine-day closes.",
+            "body": joinl([
+                "Northwind runs three entities on two continents and used to take nine days to close.",
+                "",
+                "The change was not a new ledger. It was one posting rule per entity and a single",
+                "reconciliation view that nobody could edit.",
+                "",
+                "Six weeks after cutover the close took six days. The number they quote is the second",
+                "month, not the first — the first month was worse than before."
+            ])
+        },
+        {
+            "id": "c4",
+            "title": "Pricing pages that convert for operations buyers",
+            "site": "sabermetric.example",
+            "url": "sabermetric.example/pricing-pages",
+            "snippet": "An analysis of 88 B2B pricing pages. Buyers who arrive from a comparison search behave differently.",
+            "body": joinl([
+                "88 B2B pricing pages, segmented by traffic source.",
+                "",
+                "Buyers arriving from a comparison query read the pricing table for 40 seconds longer",
+                "and leave if there is no per-entity line item. Buyers arriving from a brand search",
+                "convert on the demo button regardless of the table.",
+                "",
+                "The practical finding: the table is for the comparison visitor. The demo is for",
+                "everyone else."
+            ])
+        },
+        {
+            "id": "c5",
+            "title": "The spreadsheet is the competitor",
+            "site": "fieldnotes.example",
+            "url": "fieldnotes.example/essays/spreadsheet",
+            "snippet": "An essay on why 'we already have a system' usually means one person's workbook.",
+            "body": joinl([
+                "Every incumbent in this category is a workbook with a name.",
+                "",
+                "The workbook has three properties software rarely matches: it is free, it is",
+                "infinitely malleable, and its owner is the person who will evaluate you.",
+                "",
+                "You do not beat it with features. You beat it by taking the month-end away from it",
+                "in the first thirty days."
+            ])
+        }
+    ]
+
+    // -------------------------------------------------------------- inbox
+    st["inbox"] = [
+        {
+            "id": "m1",
+            "from": "Dana Whitfield",
+            "address": "dana@cascade.example",
+            "subject": "Pricing for three entities",
+            "at": t - 3600 * 5,
+            "unread": true,
+            "body": joinl([
+                "We run three entities under one group and the pricing page only shows a per-seat",
+                "number. Do you charge per entity, or is it folded into the seat price?",
+                "",
+                "Also — is the six-week close a guarantee or an average?",
+                "",
+                "Dana"
+            ])
+        },
+        {
+            "id": "m2",
+            "from": "Marcus Oyelaran",
+            "address": "marcus@orlo.example",
+            "subject": "Re: reference call",
+            "at": t - 3600 * 9,
+            "unread": true,
+            "body": joinl([
+                "Happy to take the call. Thursday after 15:00 works, or any time Friday morning.",
+                "",
+                "One condition: I will say what went wrong in month one, not just what worked.",
+                "",
+                "Marcus"
+            ])
+        },
+        {
+            "id": "m3",
+            "from": "Priya Raman",
+            "address": "priya@melrose.example",
+            "subject": "Question about the freight allocation",
+            "at": t - 3600 * 27,
+            "unread": false,
+            "body": joinl([
+                "We split freight by weight today and it takes two people a day. Does the system",
+                "support that natively, or do we keep the spreadsheet for that part?",
+                "",
+                "Priya"
+            ])
+        },
+        {
+            "id": "m4",
+            "from": "Northwind AP",
+            "address": "ap@northwind.example",
+            "subject": "Invoice INV-2291",
+            "at": t - 3600 * 51,
+            "unread": false,
+            "body": "Invoice INV-2291 is approved for payment on the 30th."
+        }
+    ]
+
+    // -------------------------------------------------------------- sheet
+    st["sheet"] = {
+        "id": "s_pipeline",
+        "name": "Pipeline — Q4",
+        "columns": ["Account", "Stage", "Entities", "Value", "Owner", "Next"],
+        "rows": [
+            ["Northwind", "Committed", "3", "€84,000", "Relay", "Signature"],
+            ["Cascade", "Best case", "1", "€36,000", "Post", "Reference call"],
+            ["Orlo", "Best case", "2", "€52,000", "Relay", "Security review"],
+            ["Melrose", "Committed", "1", "€28,000", "Post", "Freight answer"],
+            ["Halden", "Pipeline", "4", "€110,000", "Scout", "Discovery"],
+            ["Bracken", "Pipeline", "1", "€19,000", "Relay", "No contact since Sept"]
+        ]
+    }
+
+    // ----------------------------------------------------------- channels
+    st["channels"] = [
+        {
+            "id": "ops",
+            "name": "ops",
+            "messages": [
+                { "by": "relay", "at": t - 3600 * 6, "text": "Northwind signature moved to Thursday. Their CFO is out until then." },
+                { "by": "ledger", "at": t - 3600 * 4, "text": "That pushes the quarter by a week. Weighted still holds if Cascade lands." },
+                { "by": "forge", "at": t - 3600 * 3, "text": "Export fix is in review. Loader refuses partial files now." }
+            ]
+        }
+    ]
+
+    // ----------------------------------------------------------- calendar
+    st["calendar"] = [
+        { "id": "e1", "title": "Pipeline review", "at": t + 3600 * 3, "who": ["relay", "ledger"] },
+        { "id": "e2", "title": "Reference call — Marcus", "at": t + 86400 * 2 + 3600 * 7, "who": ["post"] },
+        { "id": "e3", "title": "Launch copy read-through", "at": t + 86400 * 4, "who": ["scout", "post"] }
+    ]
+
+    // ------------------------------------------------------------ threads
+    st["threads"] = [
+        {
+            "id": "t_scout",
+            "dot": "scout",
+            "title": "Buyer brief for the October launch",
+            "at": t - 3600 * 2,
+            "messages": [
+                {
+                    "id": "m_a1",
+                    "role": "user",
+                    "at": t - 3600 * 2,
+                    "text": "Brief me on the mid-market buyer before Thursday. I want the objection, not the persona."
+                },
+                {
+                    "id": "m_a2",
+                    "role": "dot",
+                    "at": t - 3600 * 2 + 4,
+                    "text": "Fourteen calls, three findings, one uncomfortable one. The brief is in the launch space — I kept the raw quotes out of the page and in the run log.",
+                    "run": "r_seed_scout"
+                }
+            ]
+        },
+        {
+            "id": "t_post",
+            "dot": "post",
+            "title": "Inbox — Tuesday",
+            "at": t - 3600 * 5,
+            "messages": [
+                {
+                    "id": "m_b1",
+                    "role": "user",
+                    "at": t - 3600 * 5,
+                    "text": "Three pricing questions came in. Draft the replies, do not send them."
+                },
+                {
+                    "id": "m_b2",
+                    "role": "dot",
+                    "at": t - 3600 * 5 + 3,
+                    "text": "Three drafts are ready. Two are straightforward. The third needs a decision on per-entity pricing, so I have left it as a question rather than an answer.",
+                    "run": "r_seed_post"
+                }
+            ]
+        }
+    ]
+
+    // --------------------------------------------------------------- runs
+    st["runs"] = [
+        {
+            "id": "r_seed_scout",
+            "dot": "scout",
+            "thread": "t_scout",
+            "goal": "Brief me on the mid-market buyer before Thursday.",
+            "at": t - 3600 * 2,
+            "cursor": 4,
+            "status": "done",
+            "steps": [
+                {
+                    "id": "s1",
+                    "tool": "web.search",
+                    "label": "Searched for mid-market ERP buying behaviour",
+                    "risk": 0,
+                    "state": "done",
+                    "ms": 1100,
+                    "detail": "5 results, 3 kept",
+                    "screen": {
+                        "kind": "search",
+                        "title": "Search",
+                        "url": "search.buns/ops buying behaviour",
+                        "hits": [
+                            { "title": "Mid-market operations software: the 2026 buyer survey", "site": "fieldnotes.example", "note": "412 leads, integration time first" },
+                            { "title": "Why ERP replacements fail — a postmortem collection", "site": "stackpost.example", "note": "31 write-ups, coded" },
+                            { "title": "The spreadsheet is the competitor", "site": "fieldnotes.example", "note": "essay, 6 min" }
+                        ]
+                    }
+                },
+                {
+                    "id": "s2",
+                    "tool": "web.open",
+                    "label": "Read the buyer survey and the postmortem collection",
+                    "risk": 0,
+                    "state": "done",
+                    "ms": 1600,
+                    "detail": "2 documents, 9 notes",
+                    "screen": {
+                        "kind": "reader",
+                        "title": "The 2026 buyer survey",
+                        "url": "fieldnotes.example/surveys/ops-2026",
+                        "lines": [
+                            "412 operations leads, 80–400 staff.",
+                            "What stalls a rollout: integration time (61%), data quality (48%), internal ownership (39%), price (22%).",
+                            "The survey's conclusion: buyers do not evaluate software, they evaluate the first month."
+                        ]
+                    }
+                },
+                {
+                    "id": "s3",
+                    "tool": "web.open",
+                    "label": "Cross-checked against the failure postmortems",
+                    "risk": 0,
+                    "state": "done",
+                    "ms": 900,
+                    "detail": "14 of 31 cases share one cause",
+                    "screen": {
+                        "kind": "reader",
+                        "title": "Why replacements fail",
+                        "url": "stackpost.example/erp-failures",
+                        "lines": [
+                            "Ownership gap: 14. Scope creep: 9. Vendor over-promise: 5. Software defect: 3.",
+                            "The recurring sentence: we bought it, and then nobody's job was to make it true."
+                        ]
+                    }
+                },
+                {
+                    "id": "s4",
+                    "tool": "doc.write",
+                    "label": "Wrote “Buyer brief — mid-market operations” in Aurelia launch",
+                    "risk": 0,
+                    "state": "done",
+                    "ms": 1400,
+                    "detail": "820 words, 3 sections",
+                    "screen": {
+                        "kind": "doc",
+                        "title": "Buyer brief — mid-market operations",
+                        "url": "buns://spaces/launch/p_brief",
+                        "lines": ["## What we heard", "Fourteen calls. The pattern was uncomfortably consistent.", "## What this means for the launch", "## Open questions"]
+                    }
+                }
+            ]
+        },
+        {
+            "id": "r_seed_post",
+            "dot": "post",
+            "thread": "t_post",
+            "goal": "Draft replies to the three pricing questions, do not send.",
+            "at": t - 3600 * 5,
+            "cursor": 2,
+            "status": "waiting",
+            "steps": [
+                {
+                    "id": "s1",
+                    "tool": "inbox.read",
+                    "label": "Read the three unread pricing threads",
+                    "risk": 0,
+                    "state": "done",
+                    "ms": 900,
+                    "detail": "3 threads, 1 needs a decision",
+                    "screen": {
+                        "kind": "mail",
+                        "title": "Inbox",
+                        "url": "buns://inbox",
+                        "lines": [
+                            "Dana Whitfield — Pricing for three entities",
+                            "Marcus Oyelaran — Re: reference call",
+                            "Priya Raman — Question about the freight allocation"
+                        ]
+                    }
+                },
+                {
+                    "id": "s2",
+                    "tool": "mail.draft",
+                    "label": "Drafted three replies, one left as a question",
+                    "risk": 0,
+                    "state": "done",
+                    "ms": 1700,
+                    "detail": "Draft 1 and 2 answer; draft 3 asks",
+                    "screen": {
+                        "kind": "compose",
+                        "title": "Draft — Dana Whitfield",
+                        "url": "buns://mail/draft/d1",
+                        "lines": [
+                            "Dana — per entity, not per seat. Three entities is a line item, not a multiplier.",
+                            "The six weeks is what we have done, not what we promise. I would rather show you the second month."
+                        ]
+                    }
+                },
+                {
+                    "id": "s3",
+                    "tool": "mail.send",
+                    "label": "Send the three replies",
+                    "risk": 1,
+                    "state": "waiting",
+                    "ms": 600,
+                    "detail": "3 messages leave the workspace",
+                    "screen": {
+                        "kind": "compose",
+                        "title": "Ready to send",
+                        "url": "buns://mail/outbox",
+                        "lines": ["3 recipients", "Dana Whitfield, Marcus Oyelaran, Priya Raman"]
+                    }
+                }
+            ]
+        }
+    ]
+
+    st["outbox"] = []
+    st["events"] = []
+    st["seq"] = 100
+    return st
+}

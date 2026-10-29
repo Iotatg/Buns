@@ -1,0 +1,380 @@
+// src/ui.bun — the shell, the rail, the icons, and the markdown renderer.
+//
+// Every page is one string built by concatenation. The shell owns the two
+// fixed columns; the view owns the middle. Nothing here reaches into the
+// store except through what the caller passes in.
+
+import { esc, state, clip, ago, clock, stamp } from "./store.bun"
+
+// ------------------------------------------------------------------ icons
+
+let ICONS = {
+    "search": "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l4 4",
+    "mail": "M3 6h18v12H3zM3 7l9 6 9-6",
+    "ledger": "M5 3h14v18H5zM9 8h6M9 12h6M9 16h4",
+    "code": "M9 7l-5 5 5 5M15 7l5 5-5 5",
+    "calendar": "M4 6h16v15H4zM4 10h16M8 3v4M16 3v4",
+    "doc": "M6 3h9l4 4v14H6zM15 3v4h4",
+    "check": "M4 12l5 5L20 6",
+    "x": "M5 5l14 14M19 5L5 19",
+    "arrow": "M4 12h15M13 6l6 6-6 6",
+    "arrow-ne": "M5 19L19 5M9 5h10v10",
+    "plus": "M12 5v14M5 12h14",
+    "grid": "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+    "list": "M4 6h16M4 12h16M4 18h16",
+    "chevron": "M9 6l6 6-6 6",
+    "dot": "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+    "stop": "M6 6h12v12H6z",
+    "screen": "M3 4h18v12H3zM8 20h8M12 16v4",
+    "bolt": "M13 3L5 14h6l-1 7 8-11h-6z",
+    "clock": "M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2",
+    "shield": "M12 3l8 3v6c0 5-4 8-8 9-4-1-8-4-8-9V6z"
+}
+
+export fn icon(name, size) {
+    var path = ICONS[name]
+    if path == null {
+        path = ICONS["dot"]
+    }
+    return "<svg class=\"ic\" width=\"" + str(size) + "\" height=\"" + str(size) + "\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"" + path + "\"/></svg>"
+}
+
+export fn mark(size) {
+    // A bun: a dome with a crease. Two paths, no fill tricks.
+    return "<svg width=\"" + str(size) + "\" height=\"" + str(size) + "\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">"
+        + "<path d=\"M4 18c0-5 3.6-9 8-9s8 4 8 9c0 2.2-3.6 3-8 3s-8-.8-8-3z\" fill=\"currentColor\"/>"
+        + "<path d=\"M9 13.4c.9-1 1.9-1.5 3-1.5s2.1.5 3 1.5\" fill=\"none\" stroke=\"#f4f1ea\" stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg>"
+}
+
+// --------------------------------------------------------------- fragments
+
+export fn status_dot(status) {
+    var cls = "sd sd-idle"
+    if status == "working" {
+        cls = "sd sd-work"
+    } else if status == "waiting" {
+        cls = "sd sd-wait"
+    }
+    return "<span class=\"" + cls + "\" title=\"" + esc(status) + "\"></span>"
+}
+
+export fn glyph(dot, size) {
+    return "<span class=\"glyph\" style=\"--tone:" + dot["tone"] + ";width:" + str(size) + "px;height:" + str(size) + "px\">"
+        + icon(dot["glyph"], 16) + "</span>"
+}
+
+export fn pill(text, kind) {
+    return "<span class=\"pill pill-" + kind + "\">" + esc(text) + "</span>"
+}
+
+// --------------------------------------------------------------- markdown
+
+fn inline(text) {
+    var out = esc(text)
+    // **bold**
+    var parts = out.split("**")
+    if len(parts) > 1 {
+        var joined = ""
+        var i = 0
+        while i < len(parts) {
+            if i % 2 == 1 {
+                joined += "<strong>" + parts[i] + "</strong>"
+            } else {
+                joined += parts[i]
+            }
+            i += 1
+        }
+        out = joined
+    }
+    // *em*
+    parts = out.split("*")
+    if len(parts) > 1 {
+        var joined3 = ""
+        var k = 0
+        while k < len(parts) {
+            if k % 2 == 1 {
+                joined3 += "<em>" + parts[k] + "</em>"
+            } else {
+                joined3 += parts[k]
+            }
+            k += 1
+        }
+        out = joined3
+    }
+    // `code`
+    parts = out.split("`")
+    if len(parts) > 1 {
+        var joined2 = ""
+        var j = 0
+        while j < len(parts) {
+            if j % 2 == 1 {
+                joined2 += "<code>" + parts[j] + "</code>"
+            } else {
+                joined2 += parts[j]
+            }
+            j += 1
+        }
+        out = joined2
+    }
+    return out
+}
+
+fn is_table_rule(line) {
+    let t = line.trim()
+    if not t.starts_with("|") {
+        return false
+    }
+    return t.replace("|", "").replace("-", "").replace(":", "").trim() == ""
+}
+
+export fn md(text) {
+    var lines = str(text).split("\n")
+    var out = ""
+    var i = 0
+    var in_list = false
+    var list_tag = "ul"
+    var items = []
+    var para = []
+
+    while i < len(lines) {
+        let line = lines[i].trim()
+
+        if line == "" {
+            out += flush(para, items, list_tag)
+            para = []
+            items = []
+            in_list = false
+            i += 1
+            continue
+        }
+
+        // A list item joins the open list when the marker matches, and starts a
+        // new one when it does not.
+        if line.starts_with("- ") or is_ordered(line) {
+            var tag = "ul"
+            var body = line[2:]
+            if is_ordered(line) {
+                tag = "ol"
+                body = line[3:]
+            }
+            if in_list and tag != list_tag {
+                out += flush(para, items, list_tag)
+                para = []
+                items = []
+                in_list = false
+            }
+            if not in_list {
+                out += flush(para, items, list_tag)
+                para = []
+                in_list = true
+                list_tag = tag
+            }
+            items.push(body)
+            i += 1
+            continue
+        }
+
+        // A hard-wrapped continuation of the item above it.
+        if in_list {
+            items[len(items) - 1] = items[len(items) - 1] + " " + line
+            i += 1
+            continue
+        }
+
+        let is_block = line.starts_with("#") or line.starts_with("|") or line.starts_with("> ")
+
+        if is_block {
+            out += flush(para, items, list_tag)
+            para = []
+            items = []
+        }
+
+        if line.starts_with("### ") {
+            out += "<h3>" + inline(line[4:]) + "</h3>"
+        } else if line.starts_with("## ") {
+            out += "<h2>" + inline(line[3:]) + "</h2>"
+        } else if line.starts_with("# ") {
+            out += "<h2>" + inline(line[2:]) + "</h2>"
+        } else if line.starts_with("|") {
+            var j = i + 1
+            if j < len(lines) and is_table_rule(lines[j]) {
+                out += "<div class=\"tbl\"><table><thead><tr>"
+                var cells = line.split("|")
+                var c = 0
+                while c < len(cells) {
+                    let cell = cells[c].trim()
+                    if cell != "" {
+                        out += "<th>" + inline(cell) + "</th>"
+                    }
+                    c += 1
+                }
+                out += "</tr></thead><tbody>"
+                j += 1
+                while j < len(lines) and lines[j].trim().starts_with("|") {
+                    out += "<tr>"
+                    var cells2 = lines[j].split("|")
+                    var k = 0
+                    while k < len(cells2) {
+                        let cell2 = cells2[k].trim()
+                        if cell2 != "" {
+                            out += "<td>" + inline(cell2) + "</td>"
+                        }
+                        k += 1
+                    }
+                    out += "</tr>"
+                    j += 1
+                }
+                out += "</tbody></table></div>"
+                i = j
+                continue
+            }
+            para.push(line)
+        } else if line.starts_with("> ") {
+            out += "<blockquote>" + inline(line[2:]) + "</blockquote>"
+        } else {
+            para.push(line)
+        }
+        i += 1
+    }
+
+    out += flush(para, items, list_tag)
+    return out
+}
+
+// Emit whatever is open. A list and a paragraph are never open at once.
+fn flush(para, items, list_tag) {
+    var out = ""
+    if len(items) > 0 {
+        out += "<" + list_tag + ">"
+        var i = 0
+        while i < len(items) {
+            out += "<li>" + inline(items[i]) + "</li>"
+            i += 1
+        }
+        out += "</" + list_tag + ">"
+    } else if len(para) > 0 {
+        out += "<p>" + inline(para.join(" ")) + "</p>"
+    }
+    return out
+}
+
+fn is_ordered(line) {
+    if len(line) < 3 {
+        return false
+    }
+    let first = line[0]
+    if not (first >= "0" and first <= "9") {
+        return false
+    }
+    return line[1] == "." and line[2] == " "
+}
+
+// ------------------------------------------------------------------ shell
+
+fn rail(active) {
+    let st = state()
+    var out = "<aside class=\"rail\">"
+    out += "<a class=\"ws\" href=\"/\">"
+    out += "<span class=\"ws-mark\">" + mark(22) + "</span>"
+    out += "<span class=\"ws-id\"><span class=\"ws-name\">" + esc(st["workspace"]["name"]) + "</span>"
+    out += "<span class=\"ws-plan\">" + esc(st["workspace"]["plan"]) + " · " + str(st["workspace"]["seats"]) + " seats</span></span>"
+    out += "</a>"
+
+    out += "<nav class=\"rail-sec\" aria-label=\"Coworkers\">"
+    out += "<div class=\"rail-head\"><span>Coworkers</span><span class=\"rail-count\">" + str(len(st["dots"])) + "</span></div>"
+    var i = 0
+    while i < len(st["dots"]) {
+        let d = st["dots"][i]
+        var cls = "dot-row"
+        if active == d["id"] {
+            cls += " is-on"
+        }
+        out += "<a class=\"" + cls + "\" href=\"/dots/" + d["id"] + "\">"
+        out += glyph(d, 26)
+        out += "<span class=\"dot-id\"><span class=\"dot-name\">" + esc(d["name"]) + status_dot(d["status"]) + "</span>"
+        out += "<span class=\"dot-sub\">" + esc(clip(d["now"], 30)) + "</span></span>"
+        out += "</a>"
+        i += 1
+    }
+    out += "</nav>"
+
+    out += "<nav class=\"rail-sec\" aria-label=\"Spaces\">"
+    out += "<div class=\"rail-head\"><span>Spaces</span><a class=\"rail-add\" href=\"/spaces\" aria-label=\"All spaces\">" + icon("arrow", 12) + "</a></div>"
+    i = 0
+    while i < len(st["spaces"]) {
+        let s = st["spaces"][i]
+        var cls2 = "space-row"
+        if active == s["id"] {
+            cls2 += " is-on"
+        }
+        out += "<a class=\"" + cls2 + "\" href=\"/spaces/" + s["id"] + "\">"
+        out += "<span class=\"space-dot\" style=\"--tone:" + s["tone"] + "\"></span>"
+        out += "<span class=\"space-name\">" + esc(s["name"]) + "</span>"
+        out += "<span class=\"space-n\">" + str(len(pages_of(s["id"]))) + "</span>"
+        out += "</a>"
+        i += 1
+    }
+    out += "</nav>"
+
+    out += "<div class=\"rail-foot\">"
+    out += "<a class=\"rail-link\" href=\"/about\">" + icon("shield", 13) + "How Buns works</a>"
+    out += "<span class=\"rail-ver\">v0.1 · local</span>"
+    out += "</div>"
+    out += "</aside>"
+    return out
+}
+
+fn pages_of(space_id) {
+    let st = state()
+    var out = []
+    var i = 0
+    while i < len(st["pages"]) {
+        if st["pages"][i]["space"] == space_id {
+            out.push(st["pages"][i])
+        }
+        i += 1
+    }
+    return out
+}
+
+export fn shell(active, title, body) {
+    var out = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    out += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+    out += "<title>" + esc(title) + " — Buns</title>"
+    out += "<meta name=\"theme-color\" content=\"#16140f\">"
+    out += "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
+    out += "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>"
+    out += "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap\">"
+    out += "<link rel=\"stylesheet\" href=\"/assets/app.css\">"
+    out += "<link rel=\"icon\" href=\"/assets/mark.svg\" type=\"image/svg+xml\">"
+    out += "</head><body>"
+    out += "<div class=\"shell\">"
+    out += rail(active)
+    out += "<div class=\"stage\">" + body + "</div>"
+    out += "</div>"
+    out += "<script src=\"/assets/app.js\" defer></script>"
+    out += "</body></html>"
+    return out
+}
+
+export fn bar(crumbs, actions) {
+    var out = "<header class=\"bar\">"
+    out += "<div class=\"bar-crumbs\">"
+    var i = 0
+    while i < len(crumbs) {
+        if i > 0 {
+            out += "<span class=\"bar-sep\">" + icon("chevron", 11) + "</span>"
+        }
+        out += crumbs[i]
+        i += 1
+    }
+    out += "</div>"
+    out += "<div class=\"bar-actions\">" + actions + "</div>"
+    out += "</header>"
+    return out
+}
+
+export fn meta_line(dot, at) {
+    return "<span class=\"meta-dot\" style=\"--tone:" + dot["tone"] + "\"></span>"
+        + "<span>" + esc(dot["name"]) + "</span><span class=\"meta-sep\">·</span><span>" + ago(at) + "</span>"
+}

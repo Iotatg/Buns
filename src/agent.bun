@@ -1,0 +1,616 @@
+// src/agent.bun — the planner, the tools, and the run engine.
+//
+// There is no model call in this file. The planner is a rule engine over the
+// goal text, and every "tool" is a function over the workspace store. That is
+// deliberate: the interesting half of an agent workspace is the part around
+// the model — the plan, the approvals, the artifacts, the audit trail — and
+// that part has to work before a model is plugged in. plan() is one function;
+// replace it with a completion and the rest of the system does not change.
+
+import { state, commit, new_id, clip, slug } from "./store.bun"
+
+// ------------------------------------------------------------------ lookup
+
+export fn dot_by_id(st, id) {
+    var i = 0
+    while i < len(st["dots"]) {
+        if st["dots"][i]["id"] == id {
+            return st["dots"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn space_by_id(st, id) {
+    var i = 0
+    while i < len(st["spaces"]) {
+        if st["spaces"][i]["id"] == id {
+            return st["spaces"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn page_by_id(st, id) {
+    var i = 0
+    while i < len(st["pages"]) {
+        if st["pages"][i]["id"] == id {
+            return st["pages"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn run_by_id(st, id) {
+    var i = 0
+    while i < len(st["runs"]) {
+        if st["runs"][i]["id"] == id {
+            return st["runs"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+export fn thread_by_id(st, id) {
+    var i = 0
+    while i < len(st["threads"]) {
+        if st["threads"][i]["id"] == id {
+            return st["threads"][i]
+        }
+        i += 1
+    }
+    return null
+}
+
+fn pages_in(st, space_id) {
+    var out = []
+    var i = 0
+    while i < len(st["pages"]) {
+        if st["pages"][i]["space"] == space_id {
+            out.push(st["pages"][i])
+        }
+        i += 1
+    }
+    return out
+}
+
+export fn space_pages(st, space_id) {
+    return pages_in(st, space_id)
+}
+
+// --------------------------------------------------------------- playbooks
+
+fn step(tool, label, risk, ms, detail) {
+    return {
+        "id": "s" + str(new_id("x")),
+        "tool": tool,
+        "label": label,
+        "risk": risk,
+        "state": "pending",
+        "ms": ms,
+        "detail": detail,
+        "screen": {}
+    }
+}
+
+fn has(text, word) {
+    return str(text).lower().contains(word)
+}
+
+// The plan is chosen from the words in the goal, then filled from the store so
+// that the screens show this workspace and not a recording of another one.
+export fn plan(st, dot, goal) {
+    let g = str(goal)
+    var kind = "research"
+    if has(g, "invoice") or has(g, "spend") or has(g, "budget") or has(g, "close") or has(g, "pipeline") or has(g, "revenue") {
+        kind = "finance"
+    } else if has(g, "reply") or has(g, "replies") or has(g, "inbox") or has(g, "email") or has(g, "draft") {
+        kind = "comms"
+    } else if has(g, "bug") or has(g, "test") or has(g, "deploy") or has(g, "repo") or has(g, "pull request") or has(g, "fix") {
+        kind = "eng"
+    } else if has(g, "meeting") or has(g, "schedule") or has(g, "call") or has(g, "book") or has(g, "calendar") {
+        kind = "ops"
+    } else if has(g, "brief") or has(g, "research") or has(g, "competitor") or has(g, "market") or has(g, "buyer") {
+        kind = "research"
+    } else if dot["id"] == "ledger" {
+        kind = "finance"
+    } else if dot["id"] == "post" {
+        kind = "comms"
+    } else if dot["id"] == "forge" {
+        kind = "eng"
+    } else if dot["id"] == "relay" {
+        kind = "ops"
+    }
+    return plan_of(st, kind, dot, g)
+}
+
+export fn plan_of(st, kind, dot, goal) {
+    var steps = []
+    if kind == "research" {
+        steps = research_plan(st, dot, goal)
+    } else if kind == "finance" {
+        steps = finance_plan(st, dot, goal)
+    } else if kind == "comms" {
+        steps = comms_plan(st, dot, goal)
+    } else if kind == "eng" {
+        steps = eng_plan(st, dot, goal)
+    } else {
+        steps = ops_plan(st, dot, goal)
+    }
+    return steps
+}
+
+fn corpus_hits(st, goal) {
+    var hits = []
+    var words = str(goal).lower().split(" ")
+    var i = 0
+    while i < len(st["corpus"]) {
+        let doc = st["corpus"][i]
+        var score = 0
+        var j = 0
+        while j < len(words) {
+            let w = words[j]
+            if len(w) > 3 and (doc["title"].lower().contains(w) or doc["snippet"].lower().contains(w)) {
+                score += 1
+            }
+            j += 1
+        }
+        hits.push({ "doc": doc, "score": score })
+        i += 1
+    }
+    // highest score first, stable for equal scores
+    var sorted_hits = []
+    var guard = 0
+    while len(hits) > 0 and guard < 20 {
+        var best = 0
+        var k = 1
+        while k < len(hits) {
+            if hits[k]["score"] > hits[best]["score"] {
+                best = k
+            }
+            k += 1
+        }
+        sorted_hits.push(hits[best]["doc"])
+        hits.splice(best, 1)
+        guard += 1
+    }
+    return sorted_hits
+}
+
+fn search_screen(hits) {
+    var rows = []
+    var i = 0
+    while i < len(hits) and i < 4 {
+        rows.push({
+            "title": hits[i]["title"],
+            "site": hits[i]["site"],
+            "note": clip(hits[i]["snippet"], 72)
+        })
+        i += 1
+    }
+    return { "kind": "search", "title": "Search", "url": "search.buns/" + slug("query"), "hits": rows }
+}
+
+fn reader_screen(doc) {
+    var lines = str(doc["body"]).split("\n")
+    var kept = []
+    var i = 0
+    while i < len(lines) and len(kept) < 5 {
+        if len(lines[i].trim()) > 0 {
+            kept.push(lines[i].trim())
+        }
+        i += 1
+    }
+    return { "kind": "reader", "title": doc["title"], "url": doc["url"], "lines": kept }
+}
+
+fn research_plan(st, dot, goal) {
+    let hits = corpus_hits(st, goal)
+    var a = step("web.search", "Searched the open web for “" + clip(goal, 54) + "”", 0, 1200, str(len(hits)) + " results, 3 kept")
+    a["screen"] = search_screen(hits)
+    var b = step("web.open", "Read “" + hits[0]["title"] + "”", 0, 1500, "1 document, 6 notes")
+    b["screen"] = reader_screen(hits[0])
+    var c = step("web.open", "Cross-checked “" + hits[1]["title"] + "”", 0, 1000, "2 claims confirmed, 1 contradicted")
+    c["screen"] = reader_screen(hits[1])
+    var d = step("doc.write", "Wrote the brief into " + dot["name"] + "’s space", 0, 1600, "3 sections, 8 sources")
+    d["screen"] = {
+        "kind": "doc",
+        "title": brief_title(goal),
+        "url": "buns://doc/draft",
+        "lines": ["## What we heard", "## What this means", "## Open questions"]
+    }
+    return [a, b, c, d]
+}
+
+fn brief_title(goal) {
+    var g = str(goal).trim()
+    // "Brief me on the buyer" should not become "Brief — Brief me on the buyer".
+    var lower = g.lower()
+    if lower.starts_with("brief me on ") {
+        g = g[13:]
+    } else if lower.starts_with("brief me ") {
+        g = g[9:]
+    } else if lower.starts_with("write a brief on ") {
+        g = g[17:]
+    } else if lower.starts_with("brief ") {
+        g = g[6:]
+    }
+    return "Brief — " + clip(g, 54)
+}
+
+fn finance_plan(st, dot, goal) {
+    let sheet = st["sheet"]
+    var rows = []
+    var i = 0
+    while i < len(sheet["rows"]) {
+        rows.push({
+            "cells": sheet["rows"][i],
+            "flag": i == 1 or i == 5
+        })
+        i += 1
+    }
+    var a = step("sheet.read", "Opened “" + sheet["name"] + "”", 0, 900, str(len(sheet["rows"])) + " rows, 2 flagged")
+    a["screen"] = { "kind": "sheet", "title": sheet["name"], "url": "buns://sheet/pipeline", "columns": sheet["columns"], "rows": rows }
+    var b = step("sheet.write", "Re-staged Cascade and Orlo to best case", 0, 1200, "2 rows changed, 0 formulas broken")
+    b["screen"] = { "kind": "sheet", "title": sheet["name"] + " — after", "url": "buns://sheet/pipeline", "columns": sheet["columns"], "rows": rows }
+    var c = step("doc.write", "Wrote the review note", 0, 1300, "1 page, 4 paragraphs")
+    c["screen"] = { "kind": "doc", "title": "Pipeline review — this week", "url": "buns://doc/draft", "lines": ["## Where the quarter stands", "## What moved", "## Recommendation"] }
+    var d = step("mail.send", "Send the review to the two deal owners", 1, 700, "2 messages, 1 attachment")
+    d["screen"] = { "kind": "compose", "title": "Ready to send", "url": "buns://mail/outbox", "lines": ["To: Relay, Post", "Subject: Pipeline review — this week", "1 page attached"] }
+    return [a, b, c, d]
+}
+
+fn comms_plan(st, dot, goal) {
+    var unread = []
+    var i = 0
+    while i < len(st["inbox"]) {
+        if st["inbox"][i]["unread"] {
+            unread.push(st["inbox"][i])
+        }
+        i += 1
+    }
+    if len(unread) == 0 {
+        i = 0
+        while i < len(st["inbox"]) and i < 3 {
+            unread.push(st["inbox"][i])
+            i += 1
+        }
+    }
+    var lines = []
+    i = 0
+    while i < len(unread) {
+        lines.push(unread[i]["from"] + " — " + unread[i]["subject"])
+        i += 1
+    }
+    var a = step("inbox.read", "Read " + str(len(unread)) + " threads", 0, 900, str(len(unread)) + " unread, 1 needs a decision")
+    a["screen"] = { "kind": "mail", "title": "Inbox", "url": "buns://inbox", "lines": lines }
+    var b = step("mail.draft", "Drafted " + str(len(unread)) + " replies", 0, 1700, "1 left as a question")
+    var draft_lines = []
+    i = 0
+    while i < len(unread) and i < 3 {
+        draft_lines.push("Draft → " + unread[i]["from"] + ": " + reply_gist(unread[i]))
+        i += 1
+    }
+    b["screen"] = { "kind": "compose", "title": "Drafts", "url": "buns://mail/drafts", "lines": draft_lines }
+    var c = step("mail.send", "Send the replies", 1, 700, str(len(unread)) + " messages leave the workspace")
+    c["screen"] = { "kind": "compose", "title": "Ready to send", "url": "buns://mail/outbox", "lines": ["To: " + unread[0]["from"] + " and " + str(len(unread) - 1) + " more", "Nothing is sent until you approve"] }
+    return [a, b, c]
+}
+
+fn reply_gist(mail) {
+    if has(mail["subject"], "pricing") {
+        return "per entity, not per seat — answered, with the six-week caveat"
+    }
+    if has(mail["subject"], "reference") {
+        return "Thursday after 15:00 works — confirmed"
+    }
+    if has(mail["subject"], "freight") {
+        return "left as a question: which method does entity C use?"
+    }
+    return "acknowledged, no commitment"
+}
+
+fn eng_plan(st, dot, goal) {
+    var a = step("repo.read", "Read the export path and its two callers", 0, 1300, "3 files, 1 suspicious catch")
+    a["screen"] = {
+        "kind": "code",
+        "title": "export/writer.py",
+        "url": "buns://repo/export/writer.py",
+        "lines": [
+            "  try:",
+            "      rows = upstream.read()",
+            "  except Timeout:",
+            "      log.warn('upstream timeout')",
+            "      return 0        // exits zero, writes partial file",
+            ""
+        ]
+    }
+    var b = step("repo.patch", "Patched the writer to fail closed", 0, 1400, "1 file, +18 −6")
+    b["screen"] = {
+        "kind": "diff",
+        "title": "export/writer.py",
+        "url": "buns://repo/diff",
+        "lines": [
+            "−      log.warn('upstream timeout')",
+            "−      return 0",
+            "+      log.error('upstream timeout')",
+            "+      partial.unlink()",
+            "+      raise UpstreamTimeout()",
+            "+  write_marker(path)"
+        ]
+    }
+    var c = step("ci.test", "Ran the export suite", 0, 1600, "41 passed, 2 new")
+    c["screen"] = {
+        "kind": "terminal",
+        "title": "ci",
+        "url": "buns://ci/run/418",
+        "lines": ["$ buns test export", "41 passed, 0 failed", "2 new: partial write, missing marker"]
+    }
+    var d = step("pr.open", "Open the pull request", 1, 800, "1 PR, 2 reviewers")
+    d["screen"] = { "kind": "terminal", "title": "Pull request", "url": "buns://repo/pr/419", "lines": ["Fix: fail closed on a partial export", "2 files changed, +24 −6", "Reviewers: Dana, Marcus"] }
+    return [a, b, c, d]
+}
+
+fn ops_plan(st, dot, goal) {
+    var slots = []
+    var i = 0
+    while i < len(st["calendar"]) and i < 3 {
+        slots.push(st["calendar"][i]["title"] + " — " + str(st["calendar"][i]["at"]))
+        i += 1
+    }
+    var a = step("calendar.read", "Read the next five days", 0, 800, "3 events, 2 free hours")
+    a["screen"] = { "kind": "calendar", "title": "This week", "url": "buns://calendar", "lines": slots }
+    var b = step("calendar.invite", "Book Thursday 15:00 with Marcus", 1, 900, "1 event, 2 attendees")
+    b["screen"] = { "kind": "calendar", "title": "New event", "url": "buns://calendar/new", "lines": ["Reference call — Marcus", "Thursday 15:00–15:30", "Post, Marcus Oyelaran"] }
+    var c = step("mail.send", "Send the invitation", 1, 600, "1 message")
+    c["screen"] = { "kind": "compose", "title": "Ready to send", "url": "buns://mail/outbox", "lines": ["To: Marcus Oyelaran", "Subject: Thursday 15:00 — reference call"] }
+    return [a, b, c]
+}
+
+// ------------------------------------------------------------------ effects
+
+fn effect_doc(st, dot, run, s) {
+    let title = s["screen"]["title"]
+    var space = dot["spaces"][0]
+    if len(dot["spaces"]) == 0 {
+        space = st["spaces"][0]["id"]
+    }
+    var page = {
+        "id": "p_" + str(len(st["pages"]) + 1) + "_" + slug(title)[0:12],
+        "space": space,
+        "parent": null,
+        "title": title,
+        "by": dot["id"],
+        "rev": 1,
+        "at": now(),
+        "body": doc_body(st, dot, run, title)
+    }
+    st["pages"].push(page)
+    return page
+}
+
+fn doc_body(st, dot, run, title) {
+    var lines = []
+    lines.push("## The question")
+    lines.push("")
+    lines.push(str(run["goal"]))
+    lines.push("")
+    lines.push("## What " + dot["name"] + " found")
+    lines.push("")
+    lines.push("Three sources were read for this brief. The pattern held across all three, which is")
+    lines.push("the only reason it is on this page.")
+    lines.push("")
+    var i = 0
+    while i < len(st["corpus"]) and i < 3 {
+        lines.push("- **" + st["corpus"][i]["title"] + "** — " + st["corpus"][i]["snippet"])
+        i += 1
+    }
+    lines.push("")
+    lines.push("## What to do with it")
+    lines.push("")
+    lines.push("The claim that survives a hostile reading is the narrow one. Use the narrow one.")
+    lines.push("")
+    lines.push("> Written by " + dot["name"] + ". Every claim above came from a source in the run log.")
+    return lines.join("\n")
+}
+
+fn effect_mail(st, dot, run, s) {
+    var i = 0
+    while i < len(st["inbox"]) {
+        if st["inbox"][i]["unread"] {
+            st["inbox"][i]["unread"] = false
+            st["outbox"].push({
+                "id": new_id("o"),
+                "to": st["inbox"][i]["address"],
+                "subject": "Re: " + st["inbox"][i]["subject"],
+                "at": now(),
+                "by": dot["id"],
+                "run": run["id"]
+            })
+        }
+        i += 1
+    }
+    return null
+}
+
+fn effect_calendar(st, dot, run, s) {
+    st["calendar"].push({
+        "id": new_id("e"),
+        "title": "Reference call — Marcus",
+        "at": now() + 86400 * 2,
+        "who": ["post"]
+    })
+    return null
+}
+
+fn effect_pr(st, dot, run, s) {
+    st["events"].push({ "at": now(), "dot": dot["id"], "text": "Opened pull request #419 — fail closed on a partial export" })
+    return null
+}
+
+fn apply(st, dot, run, s) {
+    if s["state"] == "applied" {
+        return
+    }
+    if s["tool"] == "doc.write" {
+        effect_doc(st, dot, run, s)
+    } else if s["tool"] == "mail.send" {
+        effect_mail(st, dot, run, s)
+    } else if s["tool"] == "calendar.invite" {
+        effect_calendar(st, dot, run, s)
+    } else if s["tool"] == "pr.open" {
+        effect_pr(st, dot, run, s)
+    }
+    s["state"] = "applied"
+}
+
+// ------------------------------------------------------------------- engine
+
+export fn advance(st, run) {
+    let dot = dot_by_id(st, run["dot"])
+    while run["cursor"] < len(run["steps"]) {
+        let s = run["steps"][run["cursor"]]
+        if s["risk"] == 1 and s["state"] != "approved" {
+            s["state"] = "waiting"
+            run["status"] = "waiting"
+            if dot != null {
+                dot["status"] = "waiting"
+                dot["now"] = s["label"]
+            }
+            return run
+        }
+        if s["state"] == "waiting" or s["state"] == "approved" {
+            s["state"] = "done"
+            apply(st, dot, run, s)
+            run["cursor"] += 1
+        } else {
+            s["state"] = "done"
+            apply(st, dot, run, s)
+            run["cursor"] += 1
+        }
+    }
+    run["status"] = "done"
+    run["at_done"] = now()
+    if dot != null {
+        dot["status"] = "idle"
+        dot["now"] = "Last: " + clip(run["goal"], 34)
+    }
+    return run
+}
+
+export fn start(st, dot_id, thread_id, goal) {
+    let dot = dot_by_id(st, dot_id)
+    var run = {
+        "id": "r_" + str(len(st["runs"]) + 1) + "_" + str(int(now()) % 10000),
+        "dot": dot_id,
+        "thread": thread_id,
+        "goal": goal,
+        "at": now(),
+        "cursor": 0,
+        "status": "working",
+        "steps": plan(st, dot, goal)
+    }
+    st["runs"].push(run)
+    dot["status"] = "working"
+    dot["now"] = goal
+    advance(st, run)
+    commit()
+    return run
+}
+
+export fn decide(st, run_id, approve) {
+    let run = run_by_id(st, run_id)
+    if run == null {
+        return null
+    }
+    if run["status"] != "waiting" {
+        return run
+    }
+    let s = run["steps"][run["cursor"]]
+    if s["risk"] != 1 {
+        return run
+    }
+    if approve {
+        s["state"] = "approved"
+        s["decided_at"] = now()
+    } else {
+        s["state"] = "skipped"
+        s["decided_at"] = now()
+        run["cursor"] += 1
+        run["refused"] = true
+        st["events"].push({ "at": now(), "dot": run["dot"], "text": "Refused: " + s["label"] })
+        commit()
+        return advance(st, run)
+    }
+    advance(st, run)
+    commit()
+    return run
+}
+
+export fn open_gates(st) {
+    var out = []
+    var i = 0
+    while i < len(st["runs"]) {
+        let r = st["runs"][i]
+        if r["status"] == "waiting" {
+            out.push(r)
+        }
+        i += 1
+    }
+    return out
+}
+
+export fn dot_runs(st, dot_id) {
+    var out = []
+    var i = 0
+    while i < len(st["runs"]) {
+        if st["runs"][i]["dot"] == dot_id {
+            out.push(st["runs"][i])
+        }
+        i += 1
+    }
+    return out
+}
+
+export fn send_message(st, dot_id, thread_id, text) {
+    var thread = null
+    if thread_id != "" {
+        thread = thread_by_id(st, thread_id)
+    }
+    if thread == null {
+        thread = {
+            "id": new_id("t"),
+            "dot": dot_id,
+            "title": clip(text, 46),
+            "at": now(),
+            "messages": []
+        }
+        st["threads"].push(thread)
+    }
+    thread["messages"].push({ "id": new_id("m"), "role": "user", "at": now(), "text": text })
+    thread["at"] = now()
+    let run = start(st, dot_id, thread["id"], text)
+    thread["messages"].push({
+        "id": new_id("m"),
+        "role": "dot",
+        "at": now(),
+        "text": reply_line(dot_by_id(st, dot_id), run),
+        "run": run["id"]
+    })
+    commit()
+    return { "thread": thread, "run": run }
+}
+
+fn reply_line(dot, run) {
+    if run["status"] == "waiting" {
+        return "Done up to the part I should not do alone. " + clip(run["steps"][run["cursor"]]["label"], 80) + " is waiting for you."
+    }
+    if run["refused"] {
+        return "Stopped where you asked. Nothing left the workspace."
+    }
+    return "Done. " + clip(run["steps"][len(run["steps"]) - 1]["detail"], 90) + "."
+}
